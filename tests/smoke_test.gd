@@ -161,6 +161,44 @@ func _test_waves() -> void:
 	_check(zone == "head" and z4.dead, "выстрел из пистолета в голову (зона «%s»)" % zone)
 	_check(p1.mag["pistol"] == 11, "выстрел тратит патрон")
 
+	# Отдача: дробовик в упор толкает дальше, чем очередь из автомата той же длины по времени.
+	var dist := {}
+	for w in ["smg", "shotgun"]:
+		var zk = _spawn(world, Vector3(-9 + (0 if w == "smg" else 3), 0.1, 6))
+		zk.aware = false
+		zk._look_timer = 100.0
+		zk.set_meta("w", w)
+		await _frames(3)
+		var start: Vector3 = zk.global_position
+		var pushes: int = Weapons.stat(w, "pellets") if w == "shotgun" else 2
+		for i in pushes:
+			zk.push(Vector3.BACK, Weapons.stat(w, "knockback"))
+		await _frames(45)
+		dist[w] = Vector2(zk.global_position.x - start.x, zk.global_position.z - start.z).length()
+		zk.queue_free()
+	_check(dist["shotgun"] > 0.6 and dist["shotgun"] > dist["smg"] * 2.0, "отдача: дробовик %.2f м, автомат %.2f м" % [dist["shotgun"], dist["smg"]])
+
+	# Выстрел толкает труп (кусок на слое обломков).
+	var corpse := RigidBody3D.new()
+	corpse.collision_layer = 16
+	corpse.collision_mask = 1
+	corpse.gravity_scale = 0.0
+	var cshape := CollisionShape3D.new()
+	var cbox := BoxShape3D.new()
+	cbox.size = Vector3(0.4, 0.4, 0.4)
+	cshape.shape = cbox
+	corpse.add_child(cshape)
+	world.add_child(corpse)
+	corpse.global_position = p1.camera.global_position + Vector3(0, 0, -3)
+	await _frames(2)
+	p1.mag["pistol"] = 12
+	p1.fire_cooldown = 0.0
+	p1.shoot()
+	await _frames(2)
+	_check(corpse.linear_velocity.z < -1.0, "выстрел отбрасывает труп (%.1f м/с)" % corpse.linear_velocity.length())
+	corpse.queue_free()
+	await _frames(1)
+
 	p1.switch_to("knife")
 	var z5 = _spawn(world, p1.global_position + Vector3(0, 0, -1.2))
 	z5.set_physics_process(false)
