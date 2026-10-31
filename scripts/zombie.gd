@@ -5,6 +5,7 @@ extends CharacterBody3D
 signal died(cause: String)
 
 const Gore := preload("res://scripts/gore.gd")
+const Sfx := preload("res://scripts/sfx.gd")
 
 const WALK_SPEED := 1.6
 const CRAWL_SPEED := 0.6
@@ -39,6 +40,7 @@ var dead := false
 var crawling := false
 var attack_cooldown := 0.0
 var speed_jitter := 1.0
+var _groan_timer := 0.0
 var _capsule: CapsuleShape3D
 var _capsule_node: CollisionShape3D
 
@@ -58,6 +60,7 @@ func _ready() -> void:
 	body = Node3D.new()
 	add_child(body)
 	speed_jitter = randf_range(0.8, 1.3)
+	_groan_timer = randf_range(0.5, 4.0)
 	var shade := randf_range(0.72, 0.92)
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color(shade, shade, shade)
@@ -71,6 +74,10 @@ func _physics_process(delta: float) -> void:
 	if dead:
 		return
 	attack_cooldown -= delta
+	_groan_timer -= delta
+	if _groan_timer <= 0.0:
+		_groan_timer = randf_range(4.0, 9.0)
+		Sfx.groan(self)
 	if not is_on_floor():
 		velocity.y -= GRAVITY * delta
 	var target = _nearest_player()
@@ -88,6 +95,7 @@ func _physics_process(delta: float) -> void:
 			velocity.z = to.z / dist * speed
 		elif attack_cooldown <= 0.0:
 			attack_cooldown = ATTACK_INTERVAL
+			Sfx.groan(self, "growl", 0.0)
 			target.take_damage(_attack_damage())
 	move_and_slide()
 	if not crawling:
@@ -102,6 +110,7 @@ func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3) -> bool
 	zone_hp[zone] -= damage * float(def["mult"])
 	Gore.splash(get_parent(), point, dir, 10)
 	if zone_hp[zone] > 0.0:
+		Sfx.play_at(get_parent(), "splat", point, -6.0)
 		if not crawling:
 			global_position += Vector3(dir.x, 0.0, dir.z).normalized() * 0.08
 		return false
@@ -119,6 +128,7 @@ func _sever(zone: String, point: Vector3, dir: Vector3) -> void:
 	var part: MeshInstance3D = parts[zone]
 	Gore.detach(get_parent(), part, dir * 3.0 + Vector3.UP * 2.0)
 	Gore.burst(get_parent(), part.global_position, dir, 25)
+	Sfx.play_at(get_parent(), "crunch", point, 0.0)
 	_remove_part(zone)
 	if zone.begins_with("leg") and not crawling:
 		_start_crawl()
@@ -132,6 +142,7 @@ func _die_headshot(point: Vector3, dir: Vector3) -> void:
 	Gore.detach(get_parent(), head, dir * 6.0 + Vector3.UP * 4.0)
 	_remove_part("head")
 	Gore.burst(get_parent(), body.to_global(STUMPS["head"]), Vector3.UP, 45)
+	Sfx.play_at(get_parent(), "crunch", point, 3.0, 0.8)
 	died.emit("head")
 	Gore.hit_stop(get_tree(), 0.06)
 	_collapse(dir * 1.5)
@@ -140,6 +151,7 @@ func _die_headshot(point: Vector3, dir: Vector3) -> void:
 func _die_body(point: Vector3, dir: Vector3) -> void:
 	dead = true
 	Gore.burst(get_parent(), point, dir, 35)
+	Sfx.play_at(get_parent(), "crunch", point, 0.0, 0.9)
 	died.emit("torso")
 	Gore.hit_stop(get_tree(), 0.04)
 	_collapse(dir * 4.0)

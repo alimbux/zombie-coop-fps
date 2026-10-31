@@ -2,6 +2,8 @@ extends CharacterBody3D
 ## Игрок от первого лица. Игрок 1 — клавиатура и мышь или геймпад 0,
 ## игрок 2 — геймпад 1. Камера живёт в своей половине экрана и следует за телом.
 
+const Sfx := preload("res://scripts/sfx.gd")
+
 const SPEED := 4.5
 const GRAVITY := 18.0
 const EYE_HEIGHT := 1.6
@@ -72,6 +74,7 @@ func take_damage(amount: float) -> void:
 		return
 	hp -= amount
 	_shake = 0.3
+	Sfx.play_flat(self, "hurt", -3.0)
 	if hud:
 		hud.flash_damage()
 	if hp <= 0.0:
@@ -137,13 +140,14 @@ func _handle_weapon() -> void:
 		if Input.is_physical_key_pressed(KEY_R):
 			reload = true
 	if reload and ammo < MAG_SIZE and reload_left <= 0.0:
-		reload_left = RELOAD_TIME
+		_start_reload()
 	# Пистолет полуавтоматический: один выстрел на одно нажатие.
 	if fire and not _fire_was_pressed and fire_cooldown <= 0.0 and reload_left <= 0.0:
 		if ammo > 0:
 			shoot()
 		else:
-			reload_left = RELOAD_TIME
+			Sfx.play_flat(self, "click", -6.0)
+			_start_reload()
 	_fire_was_pressed = fire
 
 
@@ -154,6 +158,7 @@ func shoot() -> String:
 	_shake = maxf(_shake, 0.12)
 	_kick = 1.0
 	_muzzle.light_energy = 6.0
+	Sfx.play_flat(self, "shot", -2.0)
 	var hit := _aim_ray()
 	if hit.is_empty() or not (hit["collider"] is Area3D):
 		return ""
@@ -170,6 +175,11 @@ func shoot() -> String:
 	if hud:
 		hud.flash_hit(zone == "head")
 	return zone
+
+
+func _start_reload() -> void:
+	reload_left = RELOAD_TIME
+	Sfx.play_flat(self, "reload", -4.0)
 
 
 ## Зона тела под прицелом (нужна для aim assist).
