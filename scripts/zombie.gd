@@ -110,7 +110,8 @@ func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3) -> bool
 	zone_hp[zone] -= damage * float(def["mult"])
 	Gore.splash(get_parent(), point, dir, 10)
 	if zone_hp[zone] > 0.0:
-		Sfx.play_at(get_parent(), "splat", point, -6.0)
+		Sfx.play_at(get_parent(), "splat", point, -8.0)
+		Sfx.groan(self, "pain", -2.0)
 		if not crawling:
 			global_position += Vector3(dir.x, 0.0, dir.z).normalized() * 0.08
 		return false
@@ -129,6 +130,7 @@ func _sever(zone: String, point: Vector3, dir: Vector3) -> void:
 	Gore.detach(get_parent(), part, dir * 3.0 + Vector3.UP * 2.0)
 	Gore.burst(get_parent(), part.global_position, dir, 25)
 	Sfx.play_at(get_parent(), "crunch", point, 0.0)
+	Sfx.groan(self, "pain", 0.0)
 	_remove_part(zone)
 	if zone.begins_with("leg") and not crawling:
 		_start_crawl()
