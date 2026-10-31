@@ -5,6 +5,8 @@ extends CharacterBody3D
 
 const Sfx := preload("res://scripts/sfx.gd")
 const Weapons := preload("res://scripts/weapons.gd")
+const PlayerModel := preload("res://scripts/player_model.gd")
+const Kit := preload("res://scripts/mesh_kit.gd")
 
 const SPEED := 4.5
 const GRAVITY := 18.0
@@ -48,6 +50,7 @@ var _next_was_pressed := false
 var _share_was_pressed := false
 var _muzzle: OmniLight3D
 var _weapon: Node3D
+var _model: Node3D
 var _gun_mat: StandardMaterial3D
 var _blade_mat: StandardMaterial3D
 
@@ -169,6 +172,8 @@ func _physics_process(delta: float) -> void:
 	_try_revive(delta)
 	_handle_weapon()
 	_update_camera(delta)
+	_model.rotation.y = yaw
+	_model.animate(delta, Vector2(velocity.x, velocity.z).length(), pitch, downed)
 	if hud:
 		var melee: bool = Weapons.stat(current, "melee")
 		var ammo_text := "" if melee else ("перезарядка" if reload_left > 0.0 else "%d / %d" % [mag[current], reserve[current]])
@@ -409,25 +414,18 @@ func _update_camera(delta: float) -> void:
 
 
 func _build_body() -> void:
-	var mesh := MeshInstance3D.new()
-	var capsule := CapsuleMesh.new()
-	capsule.radius = 0.35
-	capsule.height = 1.8
-	mesh.mesh = capsule
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.97, 0.97, 0.97)
-	mesh.material_override = mat
-	mesh.position.y = 0.9
-	mesh.layers = 1 << (BODY_LAYER_BIT + index)
-	add_child(mesh)
+	var layer := 1 << (BODY_LAYER_BIT + index)
+	_model = PlayerModel.new()
+	add_child(_model)
+	_model.build(index, layer)
 	# Номер над головой, чтобы напарник находил игрока в суматохе.
 	var label := Label3D.new()
 	label.text = str(index + 1)
 	label.font_size = 96
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	label.no_depth_test = true
-	label.position.y = 2.2
-	label.layers = 1 << (BODY_LAYER_BIT + index)
+	label.position.y = 2.25
+	label.layers = layer
 	add_child(label)
 
 
@@ -477,6 +475,12 @@ func _build_weapon_model() -> void:
 		return
 	for c in _weapon.get_children():
 		c.queue_free()
+	if _model:
+		_model.set_weapon(current)
+		# Своя рука в рукаве того же тона, что одежда персонажа.
+		var st: Dictionary = PlayerModel.STYLES[_model.style]
+		_add_block(Vector3(0.07, 0.07, 0.3), Vector3(0.29, -0.38, -0.3), 0.3, Kit.shade(st["top"]))
+		_add_block(Vector3(0.06, 0.07, 0.08), Vector3(0.27, -0.33, -0.47), 0.3, Kit.shade(st["skin"]))
 	match current:
 		"knife":
 			_add_block(Vector3(0.03, 0.04, 0.12), Vector3(0.24, -0.27, -0.42), 0.4, _gun_mat)

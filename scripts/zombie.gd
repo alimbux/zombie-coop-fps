@@ -1,51 +1,61 @@
 extends CharacterBody3D
-## Зомби из простых блоков. Шесть зон попадания, у каждой свой запас прочности
-## и своя смерть: голова — мгновенно, торс — падение, рука — отрыв, нога — ползёт.
+## Зомби: сгорбленная фигура в рваной одежде, руки тянутся вперёд. Каждая часть тела —
+## шарнир (шея, плечо, бедро) с несколькими мешами, поэтому зомби шагает, качает головой
+## и ползёт. Шесть зон попадания, у каждой своя прочность и своя смерть:
+## голова — мгновенно (вскользь — вскрытый череп и текущие мозги), торс — падение,
+## рука — отрыв, нога — ползёт на оставшейся, без обеих — на руках.
 
 signal died(cause: String)
 
 const Gore := preload("res://scripts/gore.gd")
 const Sfx := preload("res://scripts/sfx.gd")
+const Kit := preload("res://scripts/mesh_kit.gd")
 
 const WALK_SPEED := 1.6
-const CRAWL_SPEED := 0.6
+const CRAWL_SPEED := 0.75
 const ATTACK_RANGE := 1.3
 const ATTACK_DAMAGE := 12.0
 const ATTACK_INTERVAL := 1.0
 const GRAVITY := 18.0
-const CRAWL_TILT := -1.4
+const HUNCH := -0.25
+const ARM_REACH := 1.45
+const MAX_WOUNDS := 8
+## Насколько далеко от центра головы должна пройти пуля, чтобы задеть её вскользь.
+const GLANCE_DISTANCE := 0.09
 
+## pivot — шарнир (у головы и рук — относительно торса), size/center — зона попадания
+## относительно шарнира.
 const ZONES := {
-	"head": {"size": Vector3(0.36, 0.36, 0.36), "pos": Vector3(0.0, 1.66, 0.0), "hp": 30.0, "mult": 3.0},
-	"torso": {"size": Vector3(0.62, 0.78, 0.34), "pos": Vector3(0.0, 1.07, 0.0), "hp": 110.0, "mult": 1.0},
-	"arm_l": {"size": Vector3(0.17, 0.17, 0.72), "pos": Vector3(-0.42, 1.36, -0.3), "hp": 35.0, "mult": 0.7},
-	"arm_r": {"size": Vector3(0.17, 0.17, 0.72), "pos": Vector3(0.42, 1.36, -0.3), "hp": 35.0, "mult": 0.7},
-	"leg_l": {"size": Vector3(0.22, 0.68, 0.22), "pos": Vector3(-0.16, 0.34, 0.0), "hp": 40.0, "mult": 0.7},
-	"leg_r": {"size": Vector3(0.22, 0.68, 0.22), "pos": Vector3(0.16, 0.34, 0.0), "hp": 40.0, "mult": 0.7},
-}
-
-## Где остаётся красный обрубок, когда зона оторвана.
-const STUMPS := {
-	"head": Vector3(0.0, 1.48, 0.0),
-	"arm_l": Vector3(-0.36, 1.36, 0.0),
-	"arm_r": Vector3(0.36, 1.36, 0.0),
-	"leg_l": Vector3(-0.16, 0.68, 0.0),
-	"leg_r": Vector3(0.16, 0.68, 0.0),
+	"torso": {"pivot": Vector3(0.0, 0.88, 0.0), "size": Vector3(0.5, 0.66, 0.32), "center": Vector3(0.0, 0.32, 0.0), "hp": 110.0, "mult": 1.0},
+	"head": {"pivot": Vector3(0.0, 0.6, 0.0), "size": Vector3(0.3, 0.34, 0.32), "center": Vector3(0.0, 0.16, -0.02), "hp": 30.0, "mult": 3.0},
+	"arm_l": {"pivot": Vector3(-0.25, 0.5, 0.0), "size": Vector3(0.15, 0.72, 0.15), "center": Vector3(0.0, -0.34, 0.0), "hp": 35.0, "mult": 0.7},
+	"arm_r": {"pivot": Vector3(0.25, 0.5, 0.0), "size": Vector3(0.15, 0.72, 0.15), "center": Vector3(0.0, -0.34, 0.0), "hp": 35.0, "mult": 0.7},
+	"leg_l": {"pivot": Vector3(-0.12, 0.88, 0.0), "size": Vector3(0.2, 0.88, 0.24), "center": Vector3(0.0, -0.44, -0.02), "hp": 40.0, "mult": 0.7},
+	"leg_r": {"pivot": Vector3(0.12, 0.88, 0.0), "size": Vector3(0.2, 0.88, 0.24), "center": Vector3(0.0, -0.44, -0.02), "hp": 40.0, "mult": 0.7},
 }
 
 var zone_hp := {}
+## Шарниры частей тела по зонам.
 var parts := {}
 var body: Node3D
 var dead := false
 var crawling := false
+## Как ползёт: "left" — опирается на левую ногу, "right" — на правую, "arms" — на руках.
+var crawl_style := ""
+var skull_open := false
 var attack_cooldown := 0.0
 var speed_jitter := 1.0
-var _groan_timer := 0.0
-## Уровень с графом комнат: подсказывает, через какую дверь идти к цели. null — открытая комната.
 var level = null
 ## Заметил ли игроков. В режиме волн зомби сразу знают, где все; на этажах — стоят, пока не заметят.
 var aware := true
+
+var _groan_timer := 0.0
 var _look_timer := 0.0
+var _phase := 0.0
+var _limp_arm := ""
+var _head_tilt := 0.0
+var _wounds := 0
+var _skin: StandardMaterial3D
 var _capsule: CapsuleShape3D
 var _capsule_node: CollisionShape3D
 
@@ -62,18 +72,105 @@ func _ready() -> void:
 	_capsule_node.position.y = 0.9
 	add_child(_capsule_node)
 
-	body = Node3D.new()
-	add_child(body)
 	speed_jitter = randf_range(0.8, 1.3)
 	_groan_timer = randf_range(0.5, 4.0)
-	var shade := randf_range(0.72, 0.92)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(shade, shade, shade)
-	mat.roughness = 1.0
-	for zone in ZONES:
-		_build_part(zone, mat)
-	_add_eyes(parts["head"])
+	_phase = randf_range(0.0, TAU)
+	_head_tilt = randf_range(-0.35, 0.35)
+	if randf() < 0.25:
+		_limp_arm = ["arm_l", "arm_r"].pick_random()
+	_build_body()
 
+
+# --- Внешность ----------------------------------------------------------------
+
+func _build_body() -> void:
+	body = Node3D.new()
+	add_child(body)
+	_skin = Kit.shade(snappedf(randf_range(0.68, 0.86), 0.04))
+	var shirt := Kit.shade([0.12, 0.3, 0.5, 0.85].pick_random())
+	var pants := Kit.shade([0.1, 0.22, 0.38].pick_random())
+	var dark := Kit.shade(0.06)
+	var pale := Kit.shade(0.95)
+
+	var torso := _pivot("torso", body)
+	torso.rotation.x = HUNCH
+	Kit.add(torso, Kit.sphere(0.16), pants, Vector3(0, 0.03, 0), Vector3.ZERO, Vector3(1.15, 0.85, 0.8))
+	Kit.add(torso, Kit.sphere(0.16), shirt, Vector3(0, 0.2, 0), Vector3.ZERO, Vector3(1.1, 1.1, 0.8))
+	Kit.add(torso, Kit.sphere(0.2), shirt, Vector3(0, 0.42, 0), Vector3.ZERO, Vector3(1.2, 1.05, 0.72))
+	Kit.add(torso, Kit.capsule(0.07, 0.5), shirt, Vector3(0, 0.53, 0), Vector3(0, 0, PI / 2))
+	Kit.add(torso, Kit.cylinder(0.05, 0.06, 0.14), _skin, Vector3(0, 0.62, -0.01))
+	# Рваная рубашка: тёмная дыра и свисающий лоскут.
+	var side: float = [-1.0, 1.0].pick_random()
+	Kit.add(torso, Kit.sphere(0.08), dark, Vector3(0.08 * side, 0.4, -0.14), Vector3(0, 0, 0.6), Vector3(1.3, 0.8, 0.3))
+	Kit.add(torso, Kit.sphere(0.05), dark, Vector3(0.02 * side, 0.3, -0.135), Vector3.ZERO, Vector3(1.2, 0.8, 0.3))
+	Kit.add(torso, Kit.box(Vector3(0.13, 0.16, 0.012)), shirt, Vector3(-0.1 * side, 0.02, -0.13), Vector3(0.1, 0, 0.25 * side))
+	if randf() < 0.35:
+		# Засохшие подтёки крови на одежде.
+		var at := Vector3(randf_range(-0.1, 0.1), randf_range(0.3, 0.45), -0.145)
+		for i in 3:
+			Kit.add(torso, Kit.sphere(0.03), Gore.blood_material(), at + Vector3(randf_range(-0.03, 0.03), -i * 0.04, 0), Vector3.ZERO, Vector3(1.0 - i * 0.2, 1.4, 0.25))
+
+	var head := _pivot("head", torso)
+	head.rotation = Vector3(0.15, 0, _head_tilt)
+	Kit.add(head, Kit.sphere(0.115), _skin, Vector3(0, 0.12, -0.03), Vector3.ZERO, Vector3(0.9, 1.0, 1.0))
+	var cap := Kit.add(head, Kit.sphere(0.125), _skin, Vector3(0, 0.2, -0.01), Vector3.ZERO, Vector3(0.95, 0.75, 1.0))
+	cap.name = "Cap"
+	cap.set_meta("hit_size", Vector3(0.22, 0.12, 0.22))
+	if randf() < 0.55:
+		var hair := Kit.shade(0.08)
+		for i in randi_range(3, 6):
+			var a := randf_range(0, TAU)
+			Kit.add(cap, Kit.sphere(0.045), hair, Vector3(cos(a) * 0.08, 0.07, sin(a) * 0.08 + 0.02))
+	# Отвисшая челюсть, тёмный провал рта, запавшие глаза под надбровьем.
+	Kit.add(head, Kit.box(Vector3(0.14, 0.045, 0.11)), Kit.shade(0.5), Vector3(0, 0.025, -0.07), Vector3(0.4, 0, 0.08))
+	Kit.add(head, Kit.sphere(0.04), dark, Vector3(0, 0.065, -0.11), Vector3.ZERO, Vector3(1.3, 0.7, 0.5))
+	Kit.add(head, Kit.box(Vector3(0.025, 0.045, 0.03)), _skin, Vector3(0, 0.125, -0.14), Vector3(-0.2, 0, 0))
+	Kit.add(head, Kit.box(Vector3(0.17, 0.025, 0.04)), _skin, Vector3(0, 0.2, -0.12), Vector3(0.2, 0, 0))
+	for x in [-0.045, 0.045]:
+		Kit.add(head, Kit.sphere(0.024), dark, Vector3(x, 0.165, -0.11), Vector3.ZERO, Vector3(1.2, 0.8, 0.6))
+		Kit.add(head, Kit.sphere(0.008), pale, Vector3(x, 0.165, -0.125))
+		Kit.add(head, Kit.box(Vector3(0.02, 0.055, 0.04)), _skin, Vector3(x * 2.55, 0.14, -0.01))
+
+	for zone in ["arm_l", "arm_r"]:
+		var arm := _pivot(zone, torso)
+		var sleeve := shirt if randf() < 0.6 else _skin
+		Kit.add(arm, Kit.capsule(0.056, 0.34), sleeve, Vector3(0, -0.15, 0))
+		Kit.add(arm, Kit.capsule(0.048, 0.32), _skin, Vector3(0, -0.44, -0.02), Vector3(0.15, 0, 0))
+		Kit.add(arm, Kit.box(Vector3(0.075, 0.1, 0.035)), _skin, Vector3(0, -0.63, -0.04))
+		Kit.add(arm, Kit.box(Vector3(0.065, 0.07, 0.02)), Kit.shade(0.5), Vector3(0, -0.7, -0.06), Vector3(0.6, 0, 0))
+
+	for zone in ["leg_l", "leg_r"]:
+		var leg := _pivot(zone, body)
+		Kit.add(leg, Kit.capsule(0.076, 0.46), pants, Vector3(0, -0.21, 0))
+		Kit.add(leg, Kit.capsule(0.063, 0.44), pants if randf() < 0.7 else _skin, Vector3(0, -0.62, 0.02))
+		Kit.add(leg, Kit.box(Vector3(0.1, 0.07, 0.23)), dark if randf() < 0.75 else _skin, Vector3(0, -0.85, -0.05))
+
+
+## Шарнир части тела с зоной попадания.
+func _pivot(zone: String, parent: Node3D) -> Node3D:
+	var def: Dictionary = ZONES[zone]
+	var pivot := Kit.joint(parent, def["pivot"], zone)
+	pivot.set_meta("hit_size", def["size"])
+	pivot.set_meta("hit_center", def["center"])
+	var area := Area3D.new()
+	area.collision_layer = 4
+	area.collision_mask = 0
+	area.monitoring = false
+	area.set_meta("zone", zone)
+	area.set_meta("zombie", self)
+	area.position = def["center"]
+	var col := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = def["size"]
+	col.shape = shape
+	area.add_child(col)
+	pivot.add_child(area)
+	parts[zone] = pivot
+	zone_hp[zone] = def["hp"]
+	return pivot
+
+
+# --- Поведение ----------------------------------------------------------------
 
 func _physics_process(delta: float) -> void:
 	if dead:
@@ -82,7 +179,7 @@ func _physics_process(delta: float) -> void:
 	_groan_timer -= delta
 	if _groan_timer <= 0.0:
 		_groan_timer = randf_range(4.0, 9.0) if aware else randf_range(7.0, 15.0)
-		Sfx.groan(self)
+		Sfx.groan(self, "groan", -4.0)
 	if not is_on_floor():
 		velocity.y -= GRAVITY * delta
 	velocity.x = 0.0
@@ -93,8 +190,9 @@ func _physics_process(delta: float) -> void:
 			_look_timer = 0.3
 			_look_for_players()
 		move_and_slide()
-		body.rotation.z = sin(Time.get_ticks_msec() * 0.002 * speed_jitter) * 0.05
+		_animate(delta, 0.0)
 		return
+	var moving := false
 	var target = _nearest_player()
 	if target != null:
 		var to: Vector3 = target.global_position - global_position
@@ -106,17 +204,92 @@ func _physics_process(delta: float) -> void:
 		if step.length() > 0.05:
 			look_at(global_position + step, Vector3.UP)
 		if dist > ATTACK_RANGE:
-			var speed := (CRAWL_SPEED if crawling else WALK_SPEED) * speed_jitter
 			var dir := step.normalized()
+			var speed := _move_speed()
 			velocity.x = dir.x * speed
 			velocity.z = dir.z * speed
+			moving = true
 		elif attack_cooldown <= 0.0:
 			attack_cooldown = ATTACK_INTERVAL
 			Sfx.groan(self, "growl", 0.0)
 			target.take_damage(_attack_damage())
 	move_and_slide()
+	_animate(delta, 1.0 if moving else 0.0)
+
+
+## Скорость с рывками: ползущий зомби продвигается толчками ноги или подтягиваясь руками.
+func _move_speed() -> float:
 	if not crawling:
-		body.rotation.z = sin(Time.get_ticks_msec() * 0.006 * speed_jitter) * 0.08
+		return WALK_SPEED * speed_jitter
+	var surge: float
+	if crawl_style == "arms":
+		surge = 0.25 + 1.2 * absf(cos(_phase))
+	else:
+		surge = 0.35 + 1.3 * maxf(0.0, sin(_phase))
+	var arms := int(parts.has("arm_l")) + int(parts.has("arm_r"))
+	var factor := 0.75 if crawl_style == "arms" else 1.0
+	if arms < 2:
+		factor *= 0.7
+	return CRAWL_SPEED * speed_jitter * surge * factor
+
+
+## Покачивание и шаги: ноги ходят, руки тянутся, голова болтается.
+func _animate(delta: float, walking: float) -> void:
+	var rate := (4.2 if not crawling else 3.0) * speed_jitter
+	_phase += delta * rate * maxf(walking, 0.25)
+	var s := sin(_phase)
+	var torso: Node3D = parts.get("torso")
+	if crawling:
+		_animate_crawl(s)
+		return
+	for zone in ["leg_l", "leg_r"]:
+		if parts.has(zone):
+			var side := 1.0 if zone == "leg_l" else -1.0
+			parts[zone].rotation.x = s * 0.45 * side * walking
+	for zone in ["arm_l", "arm_r"]:
+		if parts.has(zone):
+			var reach := ARM_REACH if aware else 0.25
+			if zone == _limp_arm:
+				reach = 0.15
+			var sway := sin(_phase * 0.5 + (0.0 if zone == "arm_l" else 1.7)) * 0.12
+			parts[zone].rotation.x = lerpf(parts[zone].rotation.x, reach + sway, minf(1.0, delta * 3.0))
+			parts[zone].rotation.z = 0.08 if zone == "arm_l" else -0.08
+	if torso:
+		torso.rotation.z = s * 0.07
+		torso.rotation.x = HUNCH - absf(s) * 0.05
+	if parts.has("head"):
+		parts["head"].rotation.z = _head_tilt + sin(_phase * 0.5) * 0.12
+	body.position.y = absf(s) * 0.03 * walking
+
+
+func _animate_crawl(s: float) -> void:
+	var torso: Node3D = parts["torso"]
+	match crawl_style:
+		"arms":
+			# Лежит на животе и подтягивается руками по очереди: одна тянется вперёд,
+			# другая упирается и тащит тело.
+			if parts.has("arm_l"):
+				parts["arm_l"].rotation = Vector3(2.35 + 0.45 * s, 0, 0.25)
+			if parts.has("arm_r"):
+				parts["arm_r"].rotation = Vector3(2.35 - 0.45 * s, 0, -0.25)
+			torso.rotation = Vector3(0.25 + absf(s) * 0.06, s * 0.1, 0)
+			body.position.y = 0.1
+		_:
+			# На четвереньках без одной ноги: опирается на уцелевшую, тело заваливается
+			# на её сторону, руки загребают по очереди.
+			var leg := "leg_l" if crawl_style == "left" else "leg_r"
+			if parts.has(leg):
+				parts[leg].rotation = Vector3(0.15 + 0.2 * s, 0, 0)
+			for zone in ["arm_l", "arm_r"]:
+				if parts.has(zone):
+					var phase := s if zone == "arm_l" else -s
+					parts[zone].rotation = Vector3(2.3 + 0.35 * phase, 0, 0.12 if zone == "arm_l" else -0.12)
+			var lean := 0.3 if crawl_style == "left" else -0.3
+			torso.rotation = Vector3(0.1, lean + s * 0.06, 0)
+			body.position.y = 0.16 + maxf(0.0, s) * 0.04
+	if parts.has("head"):
+		parts["head"].rotation.x = -0.8
+		parts["head"].rotation.z = _head_tilt * 0.5
 
 
 ## Зомби услышал выстрел или его задели: идёт к игрокам.
@@ -142,15 +315,21 @@ func _look_for_players() -> void:
 				return
 
 
+# --- Попадания ----------------------------------------------------------------
+
 ## Попадание пули. Возвращает true, если зомби умер.
 func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3, loud := true) -> bool:
 	if dead or not zone_hp.has(zone):
 		return false
 	alert()
+	Gore.splash(get_parent(), point, dir, 16)
+	if zone == "head" and not skull_open and is_glancing(point, dir):
+		_open_skull(point, dir)
+		return false
 	var def: Dictionary = ZONES[zone]
 	zone_hp[zone] -= damage * float(def["mult"])
-	Gore.splash(get_parent(), point, dir, 10)
 	if zone_hp[zone] > 0.0:
+		_add_wound(zone, point, dir)
 		if loud:
 			Sfx.play_at(get_parent(), "splat", point, -8.0)
 			Sfx.groan(self, "pain", -2.0)
@@ -167,14 +346,60 @@ func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3, loud :=
 	return dead
 
 
+## Пуля прошла по краю головы, а не в лоб.
+func is_glancing(point: Vector3, dir: Vector3) -> bool:
+	if not parts.has("head"):
+		return false
+	var center: Vector3 = parts["head"].to_global(ZONES["head"]["center"])
+	var to_center := center - point
+	var d := dir.normalized()
+	var miss := to_center - d * to_center.dot(d)
+	return miss.length() > GLANCE_DISTANCE
+
+
+## Рана: кровавое пятно на теле и струйка крови, бьющая из него несколько секунд.
+func _add_wound(zone: String, point: Vector3, dir: Vector3) -> void:
+	if _wounds >= MAX_WOUNDS or not parts.has(zone):
+		return
+	_wounds += 1
+	var part: Node3D = parts[zone]
+	var local := part.to_local(point)
+	Kit.add(part, Kit.sphere(0.035), Gore.blood_material(), local)
+	var out: Vector3 = (local - Vector3(ZONES[zone]["center"])).normalized()
+	if out.length() < 0.5:
+		out = part.global_transform.basis.inverse() * -dir
+	Gore.bleed(part, local, out, randf_range(2.5, 4.0))
+
+
+## Скользящее попадание в голову: верх черепа слетает, мозги вываливаются и стекают.
+## Голова держится на честном слове: следующее попадание в неё убивает.
+func _open_skull(point: Vector3, dir: Vector3) -> void:
+	skull_open = true
+	zone_hp["head"] = minf(zone_hp["head"], 1.0)
+	var head: Node3D = parts["head"]
+	var cap: Node3D = head.get_node_or_null("Cap")
+	var top := Vector3(0, 0.2, -0.01)
+	if cap:
+		top = cap.position
+		Gore.detach(get_parent(), cap, dir * 2.5 + Vector3.UP * 3.0)
+		head.remove_child(cap)
+		cap.queue_free()
+	Gore.brains(head, top)
+	Gore.burst(get_parent(), point, dir + Vector3.UP, 20)
+	Sfx.play_at(get_parent(), "crunch", point, -2.0, 1.25)
+	Sfx.groan(self, "pain", 0.0)
+	speed_jitter *= 0.8
+	_head_tilt = 0.5 * signf(_head_tilt if _head_tilt != 0.0 else 1.0)
+
+
 func _sever(zone: String, point: Vector3, dir: Vector3) -> void:
-	var part: MeshInstance3D = parts[zone]
+	var part: Node3D = parts[zone]
 	Gore.detach(get_parent(), part, dir * 3.0 + Vector3.UP * 2.0)
 	Gore.burst(get_parent(), part.global_position, dir, 25)
 	Sfx.play_at(get_parent(), "crunch", point, 0.0)
 	Sfx.groan(self, "pain", 0.0)
 	_remove_part(zone)
-	if zone.begins_with("leg") and not crawling:
+	if zone.begins_with("leg"):
 		_start_crawl()
 	if not (parts.has("arm_l") or parts.has("arm_r") or parts.has("leg_l") or parts.has("leg_r")):
 		_die_body(point, dir)
@@ -182,10 +407,11 @@ func _sever(zone: String, point: Vector3, dir: Vector3) -> void:
 
 func _die_headshot(point: Vector3, dir: Vector3) -> void:
 	dead = true
-	var head: MeshInstance3D = parts["head"]
+	var head: Node3D = parts["head"]
+	var neck: Vector3 = head.global_position
 	Gore.detach(get_parent(), head, dir * 6.0 + Vector3.UP * 4.0)
 	_remove_part("head")
-	Gore.burst(get_parent(), body.to_global(STUMPS["head"]), Vector3.UP, 45)
+	Gore.burst(get_parent(), neck, Vector3.UP, 45)
 	Sfx.play_at(get_parent(), "crunch", point, 3.0, 0.8)
 	died.emit("head")
 	Gore.hit_stop(get_tree(), 0.06)
@@ -201,38 +427,47 @@ func _die_body(point: Vector3, dir: Vector3) -> void:
 	_collapse(dir * 4.0)
 
 
-## Тело разваливается на отдельные физические блоки.
+## Тело разваливается: каждая часть отлетает отдельным физическим куском.
 func _collapse(impulse: Vector3) -> void:
-	for child in body.get_children():
-		if child is MeshInstance3D and child.mesh is BoxMesh:
-			Gore.detach(get_parent(), child, impulse + Vector3(randf_range(-1, 1), randf_range(0, 1.5), randf_range(-1, 1)))
+	for zone in ["head", "arm_l", "arm_r", "leg_l", "leg_r", "torso"]:
+		if not parts.has(zone):
+			continue
+		var part: Node3D = parts[zone]
+		Gore.detach(get_parent(), part, impulse + Vector3(randf_range(-1, 1), randf_range(0, 1.5), randf_range(-1, 1)))
+		part.get_parent().remove_child(part)
+		part.queue_free()
+	parts.clear()
 	queue_free()
 
 
+## Ползёт: на уцелевшей ноге или, если ног не осталось, на руках.
 func _start_crawl() -> void:
+	var has_l := parts.has("leg_l")
+	var has_r := parts.has("leg_r")
+	crawl_style = "arms" if not (has_l or has_r) else ("left" if has_l else "right")
 	crawling = true
-	body.rotation.z = 0.0
+	var tilt := -1.5 if crawl_style == "arms" else -1.3
 	var tween := create_tween().set_parallel()
-	tween.tween_property(body, "rotation:x", CRAWL_TILT, 0.35).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
-	tween.tween_property(body, "position:y", 0.15, 0.35)
+	tween.tween_property(body, "rotation:x", tilt, 0.35).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
+	tween.tween_property(body, "position:y", 0.2, 0.35)
+	body.rotation.z = 0.0
 	_capsule.height = 0.8
 	_capsule_node.position.y = 0.4
 
 
 func _remove_part(zone: String) -> void:
-	var part: MeshInstance3D = parts[zone]
+	var part: Node3D = parts[zone]
+	var holder: Node3D = part.get_parent()
+	var at := part.position
 	parts.erase(zone)
 	zone_hp.erase(zone)
-	body.remove_child(part)
+	holder.remove_child(part)
 	part.queue_free()
-	if STUMPS.has(zone):
-		var stump := MeshInstance3D.new()
-		var box := BoxMesh.new()
-		box.size = Vector3.ONE * 0.2
-		box.material = Gore.blood_material()
-		stump.mesh = box
-		stump.position = STUMPS[zone]
-		body.add_child(stump)
+	# Красный обрубок, из которого ещё какое-то время хлещет кровь.
+	var stump := Kit.add(holder, Kit.sphere(0.09), Gore.blood_material(), at, Vector3.ZERO, Vector3(1, 0.7, 1))
+	var out := Vector3.UP if zone == "head" else (Vector3.DOWN if zone.begins_with("leg") else Vector3(signf(at.x), 0, 0))
+	Gore.bleed(holder, at, out, 5.0, 2.0)
+	stump.name = "Stump_" + zone
 
 
 func _attack_damage() -> float:
@@ -251,41 +486,3 @@ func _nearest_player():
 			best_dist = d
 			best = p
 	return best
-
-
-func _build_part(zone: String, mat: StandardMaterial3D) -> void:
-	var def: Dictionary = ZONES[zone]
-	var mesh_inst := MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = def["size"]
-	mesh_inst.mesh = box
-	mesh_inst.material_override = mat
-	mesh_inst.position = def["pos"]
-	body.add_child(mesh_inst)
-	var area := Area3D.new()
-	area.collision_layer = 4
-	area.collision_mask = 0
-	area.monitoring = false
-	area.set_meta("zone", zone)
-	area.set_meta("zombie", self)
-	var col := CollisionShape3D.new()
-	var shape := BoxShape3D.new()
-	shape.size = def["size"]
-	col.shape = shape
-	area.add_child(col)
-	mesh_inst.add_child(area)
-	parts[zone] = mesh_inst
-	zone_hp[zone] = def["hp"]
-
-
-func _add_eyes(head: MeshInstance3D) -> void:
-	var dark := StandardMaterial3D.new()
-	dark.albedo_color = Color.BLACK
-	for x in [-0.08, 0.08]:
-		var eye := MeshInstance3D.new()
-		var box := BoxMesh.new()
-		box.size = Vector3(0.09, 0.035, 0.02)
-		box.material = dark
-		eye.mesh = box
-		eye.position = Vector3(x, 0.03, -0.185)
-		head.add_child(eye)
