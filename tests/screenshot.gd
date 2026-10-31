@@ -5,6 +5,7 @@ extends SceneTree
 const Zombie := preload("res://scripts/zombie.gd")
 const GameConfig := preload("res://scripts/game_config.gd")
 const PlayerModel := preload("res://scripts/player_model.gd")
+const Gore := preload("res://scripts/gore.gd")
 
 
 func _initialize() -> void:
@@ -72,6 +73,9 @@ func _stage_gallery(main: Node) -> void:
 	lamp.light_energy = 1.4
 	main.world.add_child(lamp)
 	lamp.global_position = base + Vector3(0, 2.4, 1.6)
+	if part == "blood":
+		await _stage_blood(main, p0)
+		return
 	if part == "players":
 		for i in 4:
 			var m = PlayerModel.new()
@@ -133,3 +137,26 @@ func _stage_gallery(main: Node) -> void:
 		for pair in zombies:
 			if is_instance_valid(pair[0]):
 				pair[0]._animate(1.0 / 60.0, 1.0)
+
+
+## PART=blood — пол после перестрелки: кляксы, потёки по направлению выстрелов, лужи,
+## капли от раненых и размазанный след ползущего.
+func _stage_blood(main: Node, p0) -> void:
+	p0.pitch = -0.75
+	var world: Node3D = main.world
+	var o: Vector3 = p0.global_position
+	for i in 7:
+		var at := o + Vector3(randf_range(-2.5, 2.5), 1.0, -randf_range(2.0, 5.5))
+		var dir := (at - o).normalized()
+		Gore.burst(world, at, dir, 0) if i % 2 == 0 else Gore.splash(world, at, dir, 0)
+	# Петляющий след ползущего и капли раненого, шедшего наискосок.
+	var path := o + Vector3(-2.2, 0.0, -1.6)
+	for i in 14:
+		var step := Vector3(0.38, 0, -0.12 - sin(i * 0.5) * 0.2)
+		path += step
+		Gore.floor_stain(world, path, "smear", 0.32, step)
+	for i in 9:
+		var d := o + Vector3(2.4 - i * 0.35, 0, -1.4 - i * 0.45)
+		Gore.floor_stain(world, d, "drops", randf_range(0.12, 0.2), Vector3(-0.35, 0, -0.45))
+	for i in 3:
+		await physics_frame
