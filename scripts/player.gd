@@ -4,6 +4,7 @@ extends CharacterBody3D
 ## Камера живёт в своей части экрана и следует за телом.
 
 const Sfx := preload("res://scripts/sfx.gd")
+const Gore := preload("res://scripts/gore.gd")
 const Weapons := preload("res://scripts/weapons.gd")
 const PlayerModel := preload("res://scripts/player_model.gd")
 const Kit := preload("res://scripts/mesh_kit.gd")
@@ -16,7 +17,8 @@ const MOUSE_SENSITIVITY := 0.0025
 const PAD_LOOK_SPEED := 2.8
 const PAD_DEADZONE := 0.18
 const AIM_ASSIST_SLOWDOWN := 0.45
-const RAY_MASK := 1 | 4
+## Мир, зоны попадания зомби и трупы с оторванными частями (их можно толкать выстрелом).
+const RAY_MASK := 1 | 4 | 16
 const REVIVE_TIME := 3.0
 const REVIVE_RANGE := 1.6
 const MAX_HP := 100.0
@@ -273,12 +275,21 @@ func shoot() -> String:
 		_alert_zombies(stats["noise"])
 	var first := ""
 	var hit_zombies := {}
+	var loud_debris := true
 	for p in int(stats["pellets"]):
 		var dir := -camera.global_transform.basis.z
 		var spread: float = stats["spread"]
 		dir = (dir + camera.global_transform.basis.x * randf_range(-spread, spread)
 			+ camera.global_transform.basis.y * randf_range(-spread, spread)).normalized()
 		var hit := _ray(dir, stats["range"])
+		if not hit.is_empty() and hit["collider"] is RigidBody3D:
+			# Трупы и оторванные части отлетают от выстрела.
+			var rb: RigidBody3D = hit["collider"]
+			rb.apply_impulse(dir * float(stats["impulse"]) + Vector3.UP * 0.6, hit["position"] - rb.global_position)
+			if loud_debris:
+				Gore.splash(get_parent(), hit["position"], dir, 6)
+				loud_debris = false
+			continue
 		if hit.is_empty() or not (hit["collider"] is Area3D) or not hit["collider"].has_meta("zone"):
 			continue
 		var zone: String = hit["collider"].get_meta("zone")
@@ -287,7 +298,7 @@ func shoot() -> String:
 			continue
 		var loud := not hit_zombies.has(zombie)
 		hit_zombies[zombie] = true
-		if zombie.take_hit(zone, stats["damage"], hit["position"], dir, loud):
+		if zombie.take_hit(zone, stats["damage"], hit["position"], dir, loud, stats["knockback"]):
 			kills += 1
 		if first == "":
 			first = zone

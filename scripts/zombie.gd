@@ -21,6 +21,7 @@ const GRAVITY := 18.0
 const HUNCH := -0.25
 const ARM_REACH := 1.45
 const MAX_WOUNDS := 8
+const MAX_KNOCK := 7.0
 ## Насколько далеко от центра головы должна пройти пуля, чтобы задеть её вскользь.
 const GLANCE_DISTANCE := 0.09
 
@@ -59,6 +60,10 @@ var _limp_arm := ""
 var _bad_leg := "leg_r"
 var _head_tilt := 0.0
 var _wounds := 0
+## Отдача от попаданий: скорость, с которой зомби отбрасывает назад, и насколько
+## он отшатнулся (для позы).
+var _knock := Vector3.ZERO
+var _stagger := 0.0
 var _skin: StandardMaterial3D
 var _capsule: CapsuleShape3D
 var _capsule_node: CollisionShape3D
@@ -241,8 +246,10 @@ func _physics_process(delta: float) -> void:
 		Sfx.groan(self, "groan", -4.0)
 	if not is_on_floor():
 		velocity.y -= GRAVITY * delta
-	velocity.x = 0.0
-	velocity.z = 0.0
+	velocity.x = _knock.x
+	velocity.z = _knock.z
+	_knock *= exp(-delta * 6.0)
+	_stagger = maxf(0.0, _stagger - delta * 2.5)
 	if not aware:
 		_look_timer -= delta
 		if _look_timer <= 0.0:
@@ -264,9 +271,10 @@ func _physics_process(delta: float) -> void:
 			look_at(global_position + step, Vector3.UP)
 		if dist > ATTACK_RANGE:
 			var dir := step.normalized()
-			var speed := _move_speed()
-			velocity.x = dir.x * speed
-			velocity.z = dir.z * speed
+			# Пока отшатывается от попаданий, вперёд почти не идёт.
+			var speed := _move_speed() * (1.0 - minf(_stagger, 0.85))
+			velocity.x += dir.x * speed
+			velocity.z += dir.z * speed
 			moving = true
 		elif attack_cooldown <= 0.0:
 			attack_cooldown = ATTACK_INTERVAL
@@ -337,6 +345,11 @@ func _animate(delta: float, walking: float) -> void:
 			torso.rotation.z = bad_side * (0.08 + maxf(0.0, -s) * 0.22) * maxf(walking, 0.3)
 	if parts.has("head"):
 		parts["head"].rotation.z = _head_tilt + sin(_phase * 0.5) * 0.12
+	# Отшатывается назад от попадания: корпус откидывается, голова запрокидывается.
+	if torso and _stagger > 0.0:
+		torso.rotation.x += _stagger * 0.55
+		if parts.has("head"):
+			parts["head"].rotation.x = 0.15 + _stagger * 0.6
 	body.position.y = absf(s) * 0.03 * walking
 	if gait == "limp":
 		body.position.y = -maxf(0.0, -s) * 0.06 * walking
@@ -398,10 +411,11 @@ func _look_for_players() -> void:
 # --- Попадания ----------------------------------------------------------------
 
 ## Попадание пули. Возвращает true, если зомби умер.
-func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3, loud := true) -> bool:
+func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3, loud := true, force := 1.0) -> bool:
 	if dead or not zone_hp.has(zone):
 		return false
 	alert()
+	push(dir, force)
 	Gore.splash(get_parent(), point, dir, 16)
 	if zone == "head" and not skull_open and is_glancing(point, dir):
 		_open_skull(point, dir)
@@ -413,8 +427,6 @@ func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3, loud :=
 		if loud:
 			Sfx.play_at(get_parent(), "splat", point, -8.0)
 			Sfx.groan(self, "pain", -2.0)
-		if not crawling:
-			global_position += Vector3(dir.x, 0.0, dir.z).normalized() * 0.08
 		return false
 	match zone:
 		"head":
@@ -424,6 +436,14 @@ func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3, loud :=
 		_:
 			_sever(zone, point, dir)
 	return dead
+
+
+## Отдача: попадание толкает зомби по направлению выстрела. Лежачего — слабее.
+func push(dir: Vector3, force: float) -> void:
+	var flat := Vector3(dir.x, 0.0, dir.z).normalized()
+	_knock += flat * force * (0.4 if crawling else 1.0)
+	_knock = _knock.limit_length(MAX_KNOCK)
+	_stagger = minf(1.0, _stagger + force * 0.3)
 
 
 ## Пуля прошла по краю головы, а не в лоб.
@@ -474,7 +494,7 @@ func _open_skull(point: Vector3, dir: Vector3) -> void:
 
 func _sever(zone: String, point: Vector3, dir: Vector3) -> void:
 	var part: Node3D = parts[zone]
-	Gore.detach(get_parent(), part, dir * 3.0 + Vector3.UP * 2.0)
+	Gore.detach(get_parent(), part, dir * 3.0 + _knock + Vector3.UP * 2.0)
 	Gore.burst(get_parent(), part.global_position, dir, 25)
 	Sfx.play_at(get_parent(), "crunch", point, 0.0)
 	Sfx.groan(self, "pain", 0.0)
@@ -489,13 +509,13 @@ func _die_headshot(point: Vector3, dir: Vector3) -> void:
 	dead = true
 	var head: Node3D = parts["head"]
 	var neck: Vector3 = head.global_position
-	Gore.detach(get_parent(), head, dir * 6.0 + Vector3.UP * 4.0)
+	Gore.detach(get_parent(), head, dir * 6.0 + _knock + Vector3.UP * 4.0)
 	_remove_part("head")
 	Gore.burst(get_parent(), neck, Vector3.UP, 45)
 	Sfx.play_at(get_parent(), "crunch", point, 3.0, 0.8)
 	died.emit("head")
 	Gore.hit_stop(get_tree(), 0.06)
-	_collapse(dir * 1.5)
+	_collapse(dir * 1.5 + _knock * 1.2)
 
 
 func _die_body(point: Vector3, dir: Vector3) -> void:
@@ -504,7 +524,7 @@ func _die_body(point: Vector3, dir: Vector3) -> void:
 	Sfx.play_at(get_parent(), "crunch", point, 0.0, 0.9)
 	died.emit("torso")
 	Gore.hit_stop(get_tree(), 0.04)
-	_collapse(dir * 4.0)
+	_collapse(dir * 3.0 + _knock * 1.5)
 
 
 ## Тело разваливается: каждая часть отлетает отдельным физическим куском.
