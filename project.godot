@@ -20,3 +20,7 @@ window/size/viewport_height=900
 3d_physics/layer_3="hitbox"
 3d_physics/layer_4="player"
 3d_physics/layer_5="debris"
+
+[rendering]
+
+textures/vram_compression/import_etc2_astc=true
