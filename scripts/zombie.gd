@@ -12,6 +12,7 @@ const Sfx := preload("res://scripts/sfx.gd")
 const Kit := preload("res://scripts/mesh_kit.gd")
 
 const WALK_SPEED := 1.6
+const FAST_SPEED := 2.6
 const CRAWL_SPEED := 0.75
 const ATTACK_RANGE := 1.3
 const ATTACK_DAMAGE := 12.0
@@ -42,6 +43,8 @@ var dead := false
 var crawling := false
 ## Как ползёт: "left" — опирается на левую ногу, "right" — на правую, "arms" — на руках.
 var crawl_style := ""
+## Походка: "walk" — обычная, "limp" — хромает на одну ногу, "fast" — идёт быстро, рывками.
+var gait := "walk"
 var skull_open := false
 var attack_cooldown := 0.0
 var speed_jitter := 1.0
@@ -53,6 +56,7 @@ var _groan_timer := 0.0
 var _look_timer := 0.0
 var _phase := 0.0
 var _limp_arm := ""
+var _bad_leg := "leg_r"
 var _head_tilt := 0.0
 var _wounds := 0
 var _skin: StandardMaterial3D
@@ -78,6 +82,9 @@ func _ready() -> void:
 	_head_tilt = randf_range(-0.35, 0.35)
 	if randf() < 0.25:
 		_limp_arm = ["arm_l", "arm_r"].pick_random()
+	var roll := randf()
+	gait = "limp" if roll < 0.3 else ("fast" if roll < 0.5 else "walk")
+	_bad_leg = ["leg_l", "leg_r"].pick_random()
 	_build_body()
 
 
@@ -86,7 +93,16 @@ func _ready() -> void:
 func _build_body() -> void:
 	body = Node3D.new()
 	add_child(body)
-	_skin = Kit.shade(snappedf(randf_range(0.68, 0.86), 0.04))
+	# Кожа серая, темнее, чем у живых людей, в трупных пятнах.
+	_skin = Kit.shade(snappedf(randf_range(0.3, 0.46), 0.04))
+	var rot := Kit.shade(0.16)
+	var bone := Kit.shade(0.88, 0.6)
+	# Мутные светящиеся бельма: в темноте видно только их.
+	var milky := StandardMaterial3D.new()
+	milky.albedo_color = Color(0.9, 0.9, 0.9)
+	milky.emission_enabled = true
+	milky.emission = Color.WHITE
+	milky.emission_energy_multiplier = 1.5
 	var shirt := Kit.shade([0.12, 0.3, 0.5, 0.85].pick_random())
 	var pants := Kit.shade([0.1, 0.22, 0.38].pick_random())
 	var dark := Kit.shade(0.06)
@@ -99,16 +115,27 @@ func _build_body() -> void:
 	Kit.add(torso, Kit.sphere(0.2), shirt, Vector3(0, 0.42, 0), Vector3.ZERO, Vector3(1.2, 1.05, 0.72))
 	Kit.add(torso, Kit.capsule(0.07, 0.5), shirt, Vector3(0, 0.53, 0), Vector3(0, 0, PI / 2))
 	Kit.add(torso, Kit.cylinder(0.05, 0.06, 0.14), _skin, Vector3(0, 0.62, -0.01))
-	# Рваная рубашка: тёмная дыра и свисающий лоскут.
+	# Рваная рубашка: в дырах видна серая кожа, свисает лоскут.
 	var side: float = [-1.0, 1.0].pick_random()
-	Kit.add(torso, Kit.sphere(0.08), dark, Vector3(0.08 * side, 0.4, -0.14), Vector3(0, 0, 0.6), Vector3(1.3, 0.8, 0.3))
-	Kit.add(torso, Kit.sphere(0.05), dark, Vector3(0.02 * side, 0.3, -0.135), Vector3.ZERO, Vector3(1.2, 0.8, 0.3))
+	Kit.add(torso, Kit.sphere(0.08), _skin, Vector3(0.08 * side, 0.4, -0.14), Vector3(0, 0, 0.6), Vector3(1.3, 0.8, 0.3))
+	Kit.add(torso, Kit.sphere(0.05), _skin, Vector3(0.02 * side, 0.3, -0.135), Vector3.ZERO, Vector3(1.2, 0.8, 0.3))
 	Kit.add(torso, Kit.box(Vector3(0.13, 0.16, 0.012)), shirt, Vector3(-0.1 * side, 0.02, -0.13), Vector3(0.1, 0, 0.25 * side))
 	if randf() < 0.35:
 		# Засохшие подтёки крови на одежде.
 		var at := Vector3(randf_range(-0.1, 0.1), randf_range(0.3, 0.45), -0.145)
 		for i in 3:
 			Kit.add(torso, Kit.sphere(0.03), Gore.blood_material(), at + Vector3(randf_range(-0.03, 0.03), -i * 0.04, 0), Vector3.ZERO, Vector3(1.0 - i * 0.2, 1.4, 0.25))
+
+	# Трупные пятна на шее.
+	for i in randi_range(1, 2):
+		Kit.add(torso, Kit.sphere(0.025), rot, Vector3(randf_range(-0.04, 0.04), randf_range(0.6, 0.66), -0.05), Vector3.ZERO, Vector3(1.2, 1.0, 0.5))
+	if randf() < 0.3:
+		# Вспоротый живот: кишки свисают из дыры.
+		var gut := Gore.brain_material()
+		Kit.add(torso, Kit.sphere(0.07), dark, Vector3(0.03, 0.17, -0.125), Vector3.ZERO, Vector3(1.2, 0.9, 0.35))
+		for i in 3:
+			Kit.add(torso, Kit.capsule(0.024, randf_range(0.14, 0.26)), gut, Vector3(-0.02 + i * 0.03, 0.08 - i * 0.02, -0.15), Vector3(randf_range(-0.3, 0.3), 0, randf_range(-0.4, 0.4)))
+		Kit.add(torso, Kit.sphere(0.03), Gore.blood_material(), Vector3(0.03, 0.12, -0.16), Vector3.ZERO, Vector3(1.6, 1.0, 0.4))
 
 	var head := _pivot("head", torso)
 	head.rotation = Vector3(0.15, 0, _head_tilt)
@@ -126,10 +153,17 @@ func _build_body() -> void:
 	Kit.add(head, Kit.sphere(0.04), dark, Vector3(0, 0.065, -0.11), Vector3.ZERO, Vector3(1.3, 0.7, 0.5))
 	Kit.add(head, Kit.box(Vector3(0.025, 0.045, 0.03)), _skin, Vector3(0, 0.125, -0.14), Vector3(-0.2, 0, 0))
 	Kit.add(head, Kit.box(Vector3(0.17, 0.025, 0.04)), _skin, Vector3(0, 0.2, -0.12), Vector3(0.2, 0, 0))
+	var lost_eye := randf() < 0.4
 	for x in [-0.045, 0.045]:
+		if lost_eye and x > 0.0:
+			# Выбитый глаз: глубокая тёмная глазница с кровью.
+			Kit.add(head, Kit.sphere(0.032), dark, Vector3(x, 0.162, -0.105), Vector3.ZERO, Vector3(1.1, 1.0, 0.6))
+			Kit.add(head, Kit.capsule(0.008, 0.08), Gore.blood_material(), Vector3(x, 0.12, -0.122))
+			continue
 		Kit.add(head, Kit.sphere(0.024), dark, Vector3(x, 0.165, -0.11), Vector3.ZERO, Vector3(1.2, 0.8, 0.6))
-		Kit.add(head, Kit.sphere(0.008), pale, Vector3(x, 0.165, -0.125))
+		Kit.add(head, Kit.sphere(0.011), milky, Vector3(x, 0.165, -0.124))
 		Kit.add(head, Kit.box(Vector3(0.02, 0.055, 0.04)), _skin, Vector3(x * 2.55, 0.14, -0.01))
+	_add_face_rot(head, rot, bone, dark)
 
 	for zone in ["arm_l", "arm_r"]:
 		var arm := _pivot(zone, torso)
@@ -137,13 +171,38 @@ func _build_body() -> void:
 		Kit.add(arm, Kit.capsule(0.056, 0.34), sleeve, Vector3(0, -0.15, 0))
 		Kit.add(arm, Kit.capsule(0.048, 0.32), _skin, Vector3(0, -0.44, -0.02), Vector3(0.15, 0, 0))
 		Kit.add(arm, Kit.box(Vector3(0.075, 0.1, 0.035)), _skin, Vector3(0, -0.63, -0.04))
-		Kit.add(arm, Kit.box(Vector3(0.065, 0.07, 0.02)), Kit.shade(0.5), Vector3(0, -0.7, -0.06), Vector3(0.6, 0, 0))
+		Kit.add(arm, Kit.box(Vector3(0.065, 0.07, 0.02)), Kit.shade(0.3), Vector3(0, -0.7, -0.06), Vector3(0.6, 0, 0))
+		if randf() < 0.45:
+			# Пальцы в крови.
+			Kit.add(arm, Kit.box(Vector3(0.068, 0.04, 0.024)), Gore.blood_material(), Vector3(0, -0.73, -0.075), Vector3(0.6, 0, 0))
+		if randf() < 0.25:
+			# Сломанная кость торчит из предплечья.
+			Kit.add(arm, Kit.capsule(0.016, 0.12), bone, Vector3(0.03, -0.42, -0.06), Vector3(0.9, 0, 0.5))
+			Kit.add(arm, Kit.sphere(0.03), Gore.blood_material(), Vector3(0.02, -0.42, -0.04), Vector3.ZERO, Vector3(1, 1, 0.5))
+		Kit.add(arm, Kit.sphere(0.03), rot, Vector3(randf_range(-0.03, 0.03), randf_range(-0.55, -0.35), -0.04), Vector3.ZERO, Vector3(1, 1.4, 0.5))
 
 	for zone in ["leg_l", "leg_r"]:
 		var leg := _pivot(zone, body)
 		Kit.add(leg, Kit.capsule(0.076, 0.46), pants, Vector3(0, -0.21, 0))
 		Kit.add(leg, Kit.capsule(0.063, 0.44), pants if randf() < 0.7 else _skin, Vector3(0, -0.62, 0.02))
 		Kit.add(leg, Kit.box(Vector3(0.1, 0.07, 0.23)), dark if randf() < 0.75 else _skin, Vector3(0, -0.85, -0.05))
+
+
+## Гниющее лицо: пятна, оскал зубов, кровавая слюна, у кого-то прогнившая щека.
+func _add_face_rot(head: Node3D, rot: Material, bone: Material, dark: Material) -> void:
+	for i in randi_range(1, 3):
+		Kit.add(head, Kit.sphere(0.03), rot, Vector3(randf_range(-0.08, 0.08), randf_range(0.08, 0.22), -0.09), Vector3.ZERO, Vector3(1.2, 1.0, 0.4))
+	# Зубы торчат из оскала.
+	for i in 5:
+		Kit.add(head, Kit.box(Vector3(0.014, 0.022, 0.012)), bone, Vector3(-0.03 + i * 0.015, 0.082, -0.128))
+	if randf() < 0.55:
+		Kit.add(head, Kit.capsule(0.01, randf_range(0.08, 0.16)), Gore.blood_material(), Vector3(randf_range(-0.03, 0.03), -0.02, -0.12))
+	if randf() < 0.35:
+		# Щека прогнила насквозь: видны зубы сбоку.
+		var x: float = [-0.07, 0.07].pick_random()
+		Kit.add(head, Kit.sphere(0.035), dark, Vector3(x, 0.08, -0.085), Vector3.ZERO, Vector3(0.6, 1.0, 1.0))
+		for i in 3:
+			Kit.add(head, Kit.box(Vector3(0.01, 0.018, 0.012)), bone, Vector3(x * 1.08, 0.075 + (i - 1) * 0.004, -0.1 + i * 0.015))
 
 
 ## Шарнир части тела с зоной попадания.
@@ -220,6 +279,12 @@ func _physics_process(delta: float) -> void:
 ## Скорость с рывками: ползущий зомби продвигается толчками ноги или подтягиваясь руками.
 func _move_speed() -> float:
 	if not crawling:
+		match gait:
+			"fast":
+				return FAST_SPEED * speed_jitter
+			"limp":
+				# Шаг здоровой ногой — рывок вперёд, больную подтягивает.
+				return WALK_SPEED * 0.8 * speed_jitter * (0.35 + 1.1 * maxf(0.0, sin(_phase)))
 		return WALK_SPEED * speed_jitter
 	var surge: float
 	if crawl_style == "arms":
@@ -236,6 +301,8 @@ func _move_speed() -> float:
 ## Покачивание и шаги: ноги ходят, руки тянутся, голова болтается.
 func _animate(delta: float, walking: float) -> void:
 	var rate := (4.2 if not crawling else 3.0) * speed_jitter
+	if gait == "fast" and not crawling:
+		rate *= 1.5
 	_phase += delta * rate * maxf(walking, 0.25)
 	var s := sin(_phase)
 	var torso: Node3D = parts.get("torso")
@@ -245,7 +312,12 @@ func _animate(delta: float, walking: float) -> void:
 	for zone in ["leg_l", "leg_r"]:
 		if parts.has(zone):
 			var side := 1.0 if zone == "leg_l" else -1.0
-			parts[zone].rotation.x = s * 0.45 * side * walking
+			var stride := 0.6 if gait == "fast" else 0.45
+			if gait == "limp" and zone == _bad_leg:
+				# Больная нога почти не сгибается и волочится, носок вывернут.
+				parts[zone].rotation = Vector3(-0.15 + s * 0.12 * side * walking, 0.35, 0.12 if zone == "leg_l" else -0.12)
+				continue
+			parts[zone].rotation.x = s * stride * side * walking
 	for zone in ["arm_l", "arm_r"]:
 		if parts.has(zone):
 			var reach := ARM_REACH if aware else 0.25
@@ -257,9 +329,17 @@ func _animate(delta: float, walking: float) -> void:
 	if torso:
 		torso.rotation.z = s * 0.07
 		torso.rotation.x = HUNCH - absf(s) * 0.05
+		if gait == "fast":
+			torso.rotation.x = HUNCH - 0.25 - absf(s) * 0.08
+		elif gait == "limp":
+			# Тело заваливается на больную ногу при каждом шаге.
+			var bad_side := -1.0 if _bad_leg == "leg_l" else 1.0
+			torso.rotation.z = bad_side * (0.08 + maxf(0.0, -s) * 0.22) * maxf(walking, 0.3)
 	if parts.has("head"):
 		parts["head"].rotation.z = _head_tilt + sin(_phase * 0.5) * 0.12
 	body.position.y = absf(s) * 0.03 * walking
+	if gait == "limp":
+		body.position.y = -maxf(0.0, -s) * 0.06 * walking
 
 
 func _animate_crawl(s: float) -> void:

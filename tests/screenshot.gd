@@ -85,6 +85,16 @@ func _stage_gallery(main: Node) -> void:
 	var sideways := false
 	if part == "skull":
 		specs = [["", Vector3(-0.9, 0, 2.2)], ["skull", Vector3(0.0, 0, 2.6)]]
+	elif part == "mix":
+		# Игроки рядом с зомби разных походок: видно, кто живой.
+		for i in 2:
+			var m = PlayerModel.new()
+			main.world.add_child(m)
+			m.build(i, 1)
+			m.global_position = base + Vector3(-1.2 + i * 0.8, 0, 1.2)
+			m.rotation.y = PI + 0.4
+			m.animate(0.05, 0.0, 0.0, false)
+		specs = [["walk", Vector3(0.6, 0, 0.6)], ["limp", Vector3(1.4, 0, 0.2)], ["fast", Vector3(-0.2, 0, -0.3)]]
 	elif part == "crawl":
 		specs = [["leg_r", Vector3(1.6, 0, 1.6)], ["leg_l", Vector3(2.4, 0, 0.4)], ["both", Vector3(3.4, 0, 1.6)]]
 		sideways = true
@@ -95,6 +105,8 @@ func _stage_gallery(main: Node) -> void:
 		z.global_position = base + spec[1]
 		z.set_physics_process(false)
 		z.look_at(z.global_position + (Vector3.LEFT if sideways else p0.global_position - z.global_position), Vector3.UP)
+		if spec[0] in ["walk", "limp", "fast"]:
+			z.gait = spec[0]
 		zombies.append([z, spec[0]])
 	for i in 3:
 		await physics_frame
@@ -111,6 +123,8 @@ func _stage_gallery(main: Node) -> void:
 			"both":
 				z.take_hit("leg_l", 60.0, at + Vector3(0, 0.4, 0), dir)
 				z.take_hit("leg_r", 60.0, at + Vector3(0, 0.4, 0), dir)
+			"walk", "limp", "fast":
+				pass
 			_:
 				z.take_hit("torso", 15.0, at + Vector3(0.1, 1.2, 0) - dir * 0.15, dir)
 				z.take_hit("arm_l", 10.0, z.parts["arm_l"].to_global(Vector3(0, -0.3, 0)), dir)
