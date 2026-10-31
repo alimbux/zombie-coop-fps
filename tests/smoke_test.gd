@@ -87,7 +87,7 @@ func _test_waves() -> void:
 
 	var z1 = _spawn(world, Vector3(4, 0.1, -6))
 	await _frames(2)
-	_check(z1.take_hit("head", 34.0, z1.global_position + Vector3.UP * 1.66, Vector3.FORWARD), "попадание в голову убивает")
+	_check(z1.take_hit("head", 34.0, z1.parts["head"].to_global(Zombie.ZONES["head"]["center"]), Vector3.FORWARD), "попадание в голову убивает")
 
 	var z2 = _spawn(world, Vector3(6, 0.1, -6))
 	await _frames(2)
@@ -103,6 +103,20 @@ func _test_waves() -> void:
 	_check(zr.crawl_style == "left", "без правой ноги ползёт с опорой на левую")
 	await _frames(30)
 	_check(not zr.dead and zr.body.rotation.x < -1.0, "ползущий лежит лицом вниз")
+
+	# Походки: хромой идёт рывками и в среднем медленнее, быстрый — быстрее обычного.
+	var zw = _spawn(world, Vector3(-8, 0.1, -9))
+	await _frames(1)
+	var avg := {}
+	for g in ["walk", "limp", "fast"]:
+		zw.gait = g
+		var total := 0.0
+		for i in 60:
+			zw._phase = TAU * i / 60.0
+			total += zw._move_speed()
+		avg[g] = total / 60.0
+	zw.queue_free()
+	_check(avg["fast"] > avg["walk"] * 1.4 and avg["limp"] < avg["walk"], "быстрые быстрее, хромые медленнее (%.2f / %.2f / %.2f)" % [avg["fast"], avg["walk"], avg["limp"]])
 
 	# Вскользь по голове: череп вскрыт, зомби жив; второе попадание в голову убивает.
 	var zg = _spawn(world, Vector3(-4, 0.1, -6))
