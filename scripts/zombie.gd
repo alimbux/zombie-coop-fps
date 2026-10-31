@@ -63,6 +63,10 @@ var _limp_arm := ""
 var _bad_leg := "leg_r"
 var _head_tilt := 0.0
 var _wounds := 0
+var _stumps := 0
+## Сколько прошёл с последней отметки на полу и где была прошлая отметка.
+var _trail_left := 0.0
+var _trail_from := Vector3.ZERO
 ## Отдача от попаданий: скорость, с которой зомби отбрасывает назад, и насколько
 ## он отшатнулся (для позы).
 var _knock := Vector3.ZERO
@@ -294,7 +298,29 @@ func _physics_process(delta: float) -> void:
 			Sfx.groan(self, "growl", 0.0)
 			target.take_damage(_attack_damage())
 	move_and_slide()
+	_leave_trail()
 	_animate(delta, 1.0 if moving else 0.0)
+
+
+## Раненый оставляет за собой капли, ползущий — сплошной размазанный след.
+func _leave_trail() -> void:
+	if not (crawling or _wounds > 0 or _stumps > 0):
+		_trail_from = global_position
+		return
+	var step := global_position - _trail_from
+	step.y = 0.0
+	_trail_left -= step.length()
+	_trail_from = global_position
+	if _trail_left > 0.0 or step.length() < 0.0001:
+		return
+	if crawling:
+		_trail_left = randf_range(0.35, 0.5)
+		Gore.floor_stain(get_parent(), global_position, "smear", randf_range(0.28, 0.36), step)
+	else:
+		# Чем больше ран, тем чаще капает.
+		var bleeding := _wounds + _stumps * 3
+		_trail_left = randf_range(1.6, 2.6) / sqrt(float(bleeding))
+		Gore.floor_stain(get_parent(), global_position + Vector3(randf_range(-0.2, 0.2), 0, randf_range(-0.2, 0.2)), "drops", randf_range(0.12, 0.22), step)
 
 
 ## Скорость с рывками: ползущий зомби продвигается толчками ноги или подтягиваясь руками.
@@ -592,6 +618,7 @@ func _remove_part(zone: String) -> void:
 	var out := Vector3.UP if zone == "head" else (Vector3.DOWN if zone.begins_with("leg") else Vector3(signf(at.x), 0, 0))
 	Gore.bleed(holder, at, out, 5.0, 2.0)
 	stump.name = "Stump_" + zone
+	_stumps += 1
 
 
 func _attack_damage() -> float:

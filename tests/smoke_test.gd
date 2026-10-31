@@ -103,6 +103,33 @@ func _test_waves() -> void:
 	_check(zr.crawl_style == "left", "без правой ноги ползёт с опорой на левую")
 	await _frames(30)
 	_check(not zr.dead and zr.body.rotation.x < -1.0, "ползущий лежит лицом вниз")
+	# Следы крови: разные формы, ползущий размазывает кровь по полу.
+	var Gore := preload("res://scripts/gore.gd")
+	var BloodStains := preload("res://scripts/blood_stains.gd")
+	var kinds := {}
+	for st in Gore._stains:
+		if is_instance_valid(st):
+			kinds[st.material_override.albedo_texture] = true
+	_check(kinds.size() >= 4, "пятна крови разной формы (%d текстур)" % kinds.size())
+	var smears := 0
+	for st in Gore._stains:
+		if is_instance_valid(st) and st.material_override.albedo_texture.get_meta("kind", "") == "smear":
+			smears += 1
+	var before_smears := smears
+	zr._look_timer = 0.0
+	await _frames(150)
+	smears = 0
+	for st in Gore._stains:
+		if is_instance_valid(st) and st.material_override.albedo_texture.get_meta("kind", "") == "smear":
+			smears += 1
+	_check(smears > before_smears, "ползущий оставляет размазанный след (%d)" % (smears - before_smears))
+	for kind in BloodStains.KINDS:
+		var img: Image = BloodStains.material(kind).albedo_texture.get_image()
+		var filled := 0
+		for y in range(0, BloodStains.SIZE, 4):
+			for x in range(0, BloodStains.SIZE, 4):
+				filled += int(img.get_pixel(x, y).a > 0.5)
+		_check(filled > 20 and filled < 1000, "форма «%s» нарисована (%d/1024)" % [kind, filled])
 
 	# Походки: хромой идёт рывками и в среднем медленнее, быстрый — быстрее обычного.
 	var zw = _spawn(world, Vector3(-8, 0.1, -9))
