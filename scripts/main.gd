@@ -8,6 +8,7 @@ const PlayerScript := preload("res://scripts/player.gd")
 const HudScript := preload("res://scripts/player_hud.gd")
 const SpawnerScript := preload("res://scripts/zombie_spawner.gd")
 const TestRoom := preload("res://scripts/test_room.gd")
+const Sfx := preload("res://scripts/sfx.gd")
 
 var world: Node3D
 var players: Array = []
@@ -19,6 +20,7 @@ var _restarting := false
 func _ready() -> void:
 	randomize()
 	Engine.time_scale = 1.0
+	Sfx.preload_all()
 	var shared_world := World3D.new()
 
 	# Белый фон проступает тонкой полосой между половинами экрана.
