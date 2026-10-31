@@ -41,6 +41,11 @@ var crawling := false
 var attack_cooldown := 0.0
 var speed_jitter := 1.0
 var _groan_timer := 0.0
+## Уровень с графом комнат: подсказывает, через какую дверь идти к цели. null — открытая комната.
+var level = null
+## Заметил ли игроков. В режиме волн зомби сразу знают, где все; на этажах — стоят, пока не заметят.
+var aware := true
+var _look_timer := 0.0
 var _capsule: CapsuleShape3D
 var _capsule_node: CollisionShape3D
 
@@ -76,23 +81,35 @@ func _physics_process(delta: float) -> void:
 	attack_cooldown -= delta
 	_groan_timer -= delta
 	if _groan_timer <= 0.0:
-		_groan_timer = randf_range(4.0, 9.0)
+		_groan_timer = randf_range(4.0, 9.0) if aware else randf_range(7.0, 15.0)
 		Sfx.groan(self)
 	if not is_on_floor():
 		velocity.y -= GRAVITY * delta
-	var target = _nearest_player()
 	velocity.x = 0.0
 	velocity.z = 0.0
+	if not aware:
+		_look_timer -= delta
+		if _look_timer <= 0.0:
+			_look_timer = 0.3
+			_look_for_players()
+		move_and_slide()
+		body.rotation.z = sin(Time.get_ticks_msec() * 0.002 * speed_jitter) * 0.05
+		return
+	var target = _nearest_player()
 	if target != null:
 		var to: Vector3 = target.global_position - global_position
 		to.y = 0.0
 		var dist := to.length()
-		if dist > 0.05:
-			look_at(global_position + to, Vector3.UP)
+		var goal: Vector3 = target.global_position if level == null else level.next_waypoint(global_position, target.global_position)
+		var step: Vector3 = goal - global_position
+		step.y = 0.0
+		if step.length() > 0.05:
+			look_at(global_position + step, Vector3.UP)
 		if dist > ATTACK_RANGE:
 			var speed := (CRAWL_SPEED if crawling else WALK_SPEED) * speed_jitter
-			velocity.x = to.x / dist * speed
-			velocity.z = to.z / dist * speed
+			var dir := step.normalized()
+			velocity.x = dir.x * speed
+			velocity.z = dir.z * speed
 		elif attack_cooldown <= 0.0:
 			attack_cooldown = ATTACK_INTERVAL
 			Sfx.groan(self, "growl", 0.0)
@@ -102,16 +119,41 @@ func _physics_process(delta: float) -> void:
 		body.rotation.z = sin(Time.get_ticks_msec() * 0.006 * speed_jitter) * 0.08
 
 
+## Зомби услышал выстрел или его задели: идёт к игрокам.
+func alert() -> void:
+	if aware or dead:
+		return
+	aware = true
+	_groan_timer = randf_range(0.0, 0.6)
+
+
+## Замечает игрока рядом или в прямой видимости.
+func _look_for_players() -> void:
+	var eye := global_position + Vector3.UP * 1.6
+	for p in get_tree().get_nodes_in_group("players"):
+		var d: float = p.global_position.distance_to(global_position)
+		if d < 3.0:
+			alert()
+			return
+		if d < 11.0:
+			var query := PhysicsRayQueryParameters3D.create(eye, p.global_position + Vector3.UP * 1.5, 1)
+			if get_world_3d().direct_space_state.intersect_ray(query).is_empty():
+				alert()
+				return
+
+
 ## Попадание пули. Возвращает true, если зомби умер.
-func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3) -> bool:
+func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3, loud := true) -> bool:
 	if dead or not zone_hp.has(zone):
 		return false
+	alert()
 	var def: Dictionary = ZONES[zone]
 	zone_hp[zone] -= damage * float(def["mult"])
 	Gore.splash(get_parent(), point, dir, 10)
 	if zone_hp[zone] > 0.0:
-		Sfx.play_at(get_parent(), "splat", point, -8.0)
-		Sfx.groan(self, "pain", -2.0)
+		if loud:
+			Sfx.play_at(get_parent(), "splat", point, -8.0)
+			Sfx.groan(self, "pain", -2.0)
 		if not crawling:
 			global_position += Vector3(dir.x, 0.0, dir.z).normalized() * 0.08
 		return false

@@ -7,6 +7,7 @@ const BLOOD := Color(0.9, 0.0, 0.03)
 var _crosshair: Label
 var _status: Label
 var _message: Label
+var _level: Label
 var _damage: ColorRect
 var _hit_timer := 0.0
 var _message_timer := 0.0
@@ -43,22 +44,32 @@ func _ready() -> void:
 	_status.offset_right = 500
 	_status.offset_bottom = -20
 
-	_message = _label(40)
+	_level = _label(22)
+	_level.offset_left = 24
+	_level.offset_top = 16
+	_level.offset_right = 400
+	_level.offset_bottom = 50
+
+	_message = _label(34)
 	_message.anchor_right = 1.0
 	_message.offset_top = 60
 	_message.offset_bottom = 120
 	_message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 
 
-func set_status(hp: float, ammo: int, mag: int, reloading: bool, kills: int, downed: bool, revive: float) -> void:
-	var ammo_text := "перезарядка" if reloading else "%d / %d" % [ammo, mag]
-	_status.text = "ЗДОРОВЬЕ %d     ПАТРОНЫ %s     УБИТО %d" % [int(hp), ammo_text, kills]
+func set_status(hp: float, weapon: String, ammo_text: String, kills: int, downed: bool, revive: float) -> void:
+	var ammo := weapon if ammo_text == "" else "%s  %s" % [weapon, ammo_text]
+	_status.text = "ЗДОРОВЬЕ %d     %s     УБИТО %d" % [int(hp), ammo, kills]
 	if downed:
 		_message_timer = 0.2
 		if revive > 0.0:
 			_message.text = "ПОДНИМАЮТ… %d%%" % int(revive * 100.0)
 		else:
 			_message.text = "ТЫ ПАЛ — ЖДИ НАПАРНИКА"
+
+
+func set_level(text: String) -> void:
+	_level.text = text
 
 
 func flash_hit(headshot: bool) -> void:
