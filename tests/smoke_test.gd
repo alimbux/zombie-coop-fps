@@ -93,7 +93,25 @@ func _test_waves() -> void:
 	await _frames(2)
 	z2.take_hit("leg_l", 34.0, z2.global_position + Vector3.UP * 0.3, Vector3.FORWARD)
 	z2.take_hit("leg_l", 34.0, z2.global_position + Vector3.UP * 0.3, Vector3.FORWARD)
-	_check(z2.crawling and not z2.dead, "без ноги зомби ползёт")
+	_check(z2.crawling and not z2.dead and z2.crawl_style == "right", "без левой ноги ползёт с опорой на правую")
+	z2.take_hit("leg_r", 60.0, z2.global_position + Vector3.UP * 0.3, Vector3.FORWARD)
+	_check(z2.crawl_style == "arms" and not z2.dead, "без обеих ног ползёт на руках")
+
+	var zr = _spawn(world, Vector3(2, 0.1, -6))
+	await _frames(2)
+	zr.take_hit("leg_r", 60.0, zr.global_position + Vector3.UP * 0.3, Vector3.FORWARD)
+	_check(zr.crawl_style == "left", "без правой ноги ползёт с опорой на левую")
+	await _frames(30)
+	_check(not zr.dead and zr.body.rotation.x < -1.0, "ползущий лежит лицом вниз")
+
+	# Вскользь по голове: череп вскрыт, зомби жив; второе попадание в голову убивает.
+	var zg = _spawn(world, Vector3(-4, 0.1, -6))
+	await _frames(2)
+	var head_center: Vector3 = zg.parts["head"].to_global(Zombie.ZONES["head"]["center"])
+	var edge := head_center + Vector3(0.13, 0, 0)
+	_check(zg.is_glancing(edge, Vector3.FORWARD) and not zg.is_glancing(head_center, Vector3.FORWARD), "край головы считается касательным, центр — нет")
+	_check(not zg.take_hit("head", 34.0, edge, Vector3.FORWARD) and zg.skull_open, "вскользь по голове: череп вскрыт, зомби жив")
+	_check(zg.take_hit("head", 22.0, head_center, Vector3.FORWARD), "второе попадание во вскрытую голову убивает")
 
 	var z3 = _spawn(world, Vector3(8, 0.1, -6))
 	await _frames(2)
@@ -122,7 +140,8 @@ func _test_waves() -> void:
 	z4.set_physics_process(false)
 	await _frames(3)
 	# Голова ровно на линии взгляда (игрок мог чуть подпрыгнуть на неровности пола).
-	z4.global_position.y = p1.camera.global_position.y - 1.66
+	var head_y: float = z4.parts["head"].to_global(Zombie.ZONES["head"]["center"]).y
+	z4.global_position.y += p1.camera.global_position.y - head_y
 	await _frames(1)
 	var zone: String = p1.shoot()
 	_check(zone == "head" and z4.dead, "выстрел из пистолета в голову (зона «%s»)" % zone)

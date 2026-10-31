@@ -8,6 +8,7 @@ const WORLD_MASK := 1
 const DEBRIS_LAYER := 16
 
 static var _blood_mat: StandardMaterial3D
+static var _brain_mat: StandardMaterial3D
 static var _stain_mesh: CylinderMesh
 static var _drop_mesh: BoxMesh
 static var _stains: Array = []
@@ -40,30 +41,148 @@ static func burst(world: Node3D, point: Vector3, dir: Vector3, amount: int) -> v
 
 
 ## Превращает часть тела в отдельный физический объект, который отлетает от импульса.
-static func detach(world: Node3D, part: MeshInstance3D, impulse: Vector3) -> RigidBody3D:
+## Часть — меш или шарнир с несколькими мешами; размер куска берётся из меты hit_size.
+static func detach(world: Node3D, part: Node3D, impulse: Vector3) -> RigidBody3D:
 	var rb := RigidBody3D.new()
 	rb.collision_layer = DEBRIS_LAYER
 	rb.collision_mask = WORLD_MASK | DEBRIS_LAYER
 	rb.mass = 2.0
-	var copy: MeshInstance3D = part.duplicate()
-	for child in copy.get_children():
-		if child is Area3D:
-			copy.remove_child(child)
-			child.free()
-	copy.transform = Transform3D.IDENTITY
+	var copy: Node3D = part.duplicate()
+	_strip(copy)
+	copy.transform = Transform3D(Basis.from_scale(part.scale), Vector3.ZERO)
 	rb.add_child(copy)
 	var col := CollisionShape3D.new()
 	var shape := BoxShape3D.new()
-	shape.size = (part.mesh as BoxMesh).size
+	if part.has_meta("hit_size"):
+		shape.size = part.get_meta("hit_size")
+	elif part is MeshInstance3D and part.mesh is BoxMesh:
+		shape.size = (part.mesh as BoxMesh).size
+	else:
+		shape.size = Vector3.ONE * 0.2
 	col.shape = shape
+	col.position = part.get_meta("hit_center", Vector3.ZERO)
 	rb.add_child(col)
 	world.add_child(rb)
-	rb.global_transform = part.global_transform
+	rb.global_transform = part.global_transform.orthonormalized()
 	rb.apply_central_impulse(impulse)
 	rb.angular_velocity = Vector3(randf_range(-9, 9), randf_range(-9, 9), randf_range(-9, 9))
 	_blood_trail(world, rb)
 	_track(_debris, rb, MAX_DEBRIS)
 	return rb
+
+
+## Рана, из которой толчками бьёт кровь: брызги летят из точки на теле и падают на пол.
+## local_pos и out — в координатах узла, к которому прикреплена рана.
+static func bleed(holder: Node3D, local_pos: Vector3, out: Vector3, seconds: float, strength := 1.0) -> void:
+	var p := CPUParticles3D.new()
+	p.amount = int(18 * strength)
+	p.lifetime = 0.7
+	p.local_coords = false
+	p.direction = out.normalized()
+	p.spread = 20.0
+	p.initial_velocity_min = 0.8 * strength
+	p.initial_velocity_max = 2.2 * strength
+	p.gravity = Vector3(0, -12, 0)
+	p.scale_amount_min = 0.4
+	p.scale_amount_max = 0.9
+	p.mesh = _drop()
+	p.position = local_pos
+	holder.add_child(p)
+	p.emitting = true
+	# Кровь бьёт толчками, как пульс, и постепенно слабеет.
+	var tween := p.create_tween().set_loops(maxi(1, int(seconds / 0.5)))
+	tween.tween_property(p, "speed_scale", 1.6, 0.12)
+	tween.tween_property(p, "speed_scale", 0.6, 0.38)
+	_stop_later(p, seconds)
+
+
+## Вскрытый череп: серо-розовые мозги наружу, они стекают по лицу и падают комками.
+static func brains(head: Node3D, top: Vector3) -> void:
+	var mat := brain_material()
+	for offset in [Vector3(-0.045, 0.05, 0.0), Vector3(0.045, 0.055, -0.02), Vector3(0.0, 0.07, 0.03), Vector3(0.01, 0.045, -0.06), Vector3(-0.02, 0.03, 0.06)]:
+		var lobe := MeshInstance3D.new()
+		var s := SphereMesh.new()
+		s.radius = 0.06
+		s.height = 0.09
+		s.radial_segments = 8
+		s.rings = 4
+		lobe.mesh = s
+		lobe.material_override = mat
+		lobe.position = top + offset
+		head.add_child(lobe)
+	var rim := MeshInstance3D.new()
+	var ring := CylinderMesh.new()
+	ring.top_radius = 0.11
+	ring.bottom_radius = 0.12
+	ring.height = 0.03
+	ring.material = blood_material()
+	rim.mesh = ring
+	rim.position = top + Vector3.UP * 0.02
+	head.add_child(rim)
+	# Струйка мозгов по щеке: медленно вытягивается вниз.
+	var strand := MeshInstance3D.new()
+	var cap := CapsuleMesh.new()
+	cap.radius = 0.03
+	cap.height = 0.22
+	strand.mesh = cap
+	strand.material_override = mat
+	strand.position = top + Vector3(0.08, -0.04, -0.06)
+	strand.scale = Vector3(1, 0.15, 1)
+	head.add_child(strand)
+	var tween := strand.create_tween().set_parallel()
+	tween.tween_property(strand, "scale:y", 1.0, 3.0)
+	tween.tween_property(strand, "position:y", top.y - 0.13, 3.0)
+	# Комки мозгов и кровь капают, пока зомби жив.
+	var drip := CPUParticles3D.new()
+	drip.amount = 8
+	drip.lifetime = 1.0
+	drip.local_coords = false
+	drip.direction = Vector3(0, -1, -0.4)
+	drip.spread = 45.0
+	drip.initial_velocity_min = 0.2
+	drip.initial_velocity_max = 0.8
+	drip.gravity = Vector3(0, -9, 0)
+	drip.scale_amount_min = 0.6
+	drip.scale_amount_max = 1.4
+	var chunk := SphereMesh.new()
+	chunk.radius = 0.025
+	chunk.height = 0.04
+	chunk.radial_segments = 6
+	chunk.rings = 3
+	chunk.material = mat
+	drip.mesh = chunk
+	drip.position = top + Vector3(0, -0.02, -0.05)
+	head.add_child(drip)
+	drip.emitting = true
+	bleed(head, top, Vector3(0, 1, -0.3), 6.0, 0.7)
+
+
+static func brain_material() -> StandardMaterial3D:
+	if _brain_mat == null:
+		_brain_mat = StandardMaterial3D.new()
+		# Слегка розоватые: фильтр оставляет им немного красного, но не как у крови.
+		_brain_mat.albedo_color = Color(0.78, 0.5, 0.52)
+		_brain_mat.roughness = 0.35
+		_brain_mat.emission_enabled = true
+		_brain_mat.emission = Color(0.12, 0.05, 0.05)
+	return _brain_mat
+
+
+## Выключает частицы через заданное время. Таймер живёт вместе с частицами,
+## поэтому не ломается, если часть тела уже убрана со сцены.
+static func _stop_later(p: CPUParticles3D, seconds: float) -> void:
+	var t := p.create_tween()
+	t.tween_interval(seconds)
+	t.tween_property(p, "emitting", false, 0.0)
+
+
+static func _strip(node: Node) -> void:
+	for child in node.get_children():
+		if child is Area3D or child is CPUParticles3D:
+			node.remove_child(child)
+			child.free()
+		else:
+			_strip(child)
 
 
 ## Короткое замедление времени на фатальном попадании.
@@ -106,10 +225,7 @@ static func _blood_trail(world: Node3D, rb: RigidBody3D) -> void:
 	p.mesh = _drop()
 	rb.add_child(p)
 	p.emitting = true
-	world.get_tree().create_timer(1.2).timeout.connect(func():
-		if is_instance_valid(p):
-			p.emitting = false
-	)
+	_stop_later(p, 1.2)
 
 
 static func _stain_ray(world: Node3D, from: Vector3, to: Vector3, radius: float) -> void:
