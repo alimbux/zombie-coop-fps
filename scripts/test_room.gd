@@ -1,6 +1,6 @@
 extends RefCounted
-## Тестовая комната для прототипа: тёмный зал 24×24 м с колоннами, ящиками и редкими лампами.
-## Позже её место займёт процедурный генератор этажей.
+## Зал для режима «Волны»: тёмный зал 24×24 м с колоннами, ящиками и редкими лампами.
+## Сюда же падают находки между волнами.
 
 const SIZE := 24.0
 const HEIGHT := 3.5
@@ -57,6 +57,7 @@ static func build(world: Node3D) -> Dictionary:
 	return {
 		"player_starts": [Vector3(-1, 0.1, 8), Vector3(1, 0.1, 8), Vector3(-3, 0.1, 8), Vector3(3, 0.1, 8)],
 		"zombie_spawns": [Vector3(-10, 0.1, -10), Vector3(10, 0.1, -10), Vector3(-10, 0.1, -2), Vector3(10, 0.1, -2)],
+		"pickup_points": [Vector3(-4, 0, 6), Vector3(4, 0, 6), Vector3(0, 0, 3), Vector3(-4, 0, 0), Vector3(4, 0, 2), Vector3(0, 0, -3)],
 	}
 
 

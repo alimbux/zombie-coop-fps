@@ -12,7 +12,7 @@ static var _active_groans := 0
 
 ## Генерирует все звуки заранее, чтобы первый выстрел не подтормаживал.
 static func preload_all() -> void:
-	for sound in ["shot", "splat", "crunch", "groan", "growl", "pain", "hurt", "click", "reload"]:
+	for sound in ["shot", "splat", "crunch", "groan", "growl", "pain", "hurt", "click", "reload", "slash", "pickup"]:
 		stream(sound)
 
 
@@ -88,6 +88,10 @@ static func _synth(sound: String, variant: int) -> PackedFloat32Array:
 			return _click(rng, 0.0, 0.05)
 		"reload":
 			return _mix(_click(rng, 0.0, 0.5), _click(rng, 0.35, 0.5))
+		"slash":
+			return _slash(rng)
+		"pickup":
+			return _pickup()
 	return PackedFloat32Array()
 
 
@@ -245,6 +249,36 @@ static func _pain(rng: RandomNumberGenerator) -> PackedFloat32Array:
 		if u > 0.64 and u < 0.82:
 			lp += (rng.randf_range(-1.0, 1.0) - lp) * 0.25
 			out[i] += lp * 0.06 * (1.0 - (u - 0.64) / 0.18)
+	return out
+
+
+## Взмах ножом: шипящий «вжух», нарастает и стихает.
+static func _slash(rng: RandomNumberGenerator) -> PackedFloat32Array:
+	var n := int(RATE * 0.2)
+	var out := PackedFloat32Array()
+	out.resize(n)
+	var lp := 0.0
+	var prev := 0.0
+	for i in n:
+		var u := float(i) / n
+		var noise := rng.randf_range(-1.0, 1.0)
+		lp += (noise - lp) * lerpf(0.15, 0.6, u)
+		var bright := lp - prev
+		prev = lp
+		out[i] = (lp * 0.6 + bright * 1.5) * sin(PI * u) * sin(PI * u)
+	return out
+
+
+## Подбор предмета: два коротких звонких сигнала.
+static func _pickup() -> PackedFloat32Array:
+	var n := int(RATE * 0.18)
+	var out := PackedFloat32Array()
+	out.resize(n)
+	for i in n:
+		var t := float(i) / RATE
+		var f := 880.0 if t < 0.07 else 1320.0
+		var local := t if t < 0.07 else t - 0.07
+		out[i] = sin(TAU * f * t) * exp(-local * 30.0) * 0.6
 	return out
 
 
