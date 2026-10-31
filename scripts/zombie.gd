@@ -21,7 +21,10 @@ const GRAVITY := 18.0
 const HUNCH := -0.25
 const ARM_REACH := 1.45
 const MAX_WOUNDS := 8
-const MAX_KNOCK := 7.0
+const MAX_KNOCK := 14.0
+## Если отдача разогнала зомби сильнее этого (дробовик в упор), он падает навзничь.
+const KNOCKDOWN_SPEED := 9.0
+const KNOCKDOWN_TIME := 1.4
 ## Насколько далеко от центра головы должна пройти пуля, чтобы задеть её вскользь.
 const GLANCE_DISTANCE := 0.09
 
@@ -64,6 +67,9 @@ var _wounds := 0
 ## он отшатнулся (для позы).
 var _knock := Vector3.ZERO
 var _stagger := 0.0
+## Сколько ещё лежит после сбивания с ног, и поворот корпуса от попадания.
+var knocked_down := 0.0
+var _flinch := 0.0
 var _skin: StandardMaterial3D
 var _capsule: CapsuleShape3D
 var _capsule_node: CollisionShape3D
@@ -248,8 +254,15 @@ func _physics_process(delta: float) -> void:
 		velocity.y -= GRAVITY * delta
 	velocity.x = _knock.x
 	velocity.z = _knock.z
-	_knock *= exp(-delta * 6.0)
-	_stagger = maxf(0.0, _stagger - delta * 2.5)
+	_knock *= exp(-delta * 4.5)
+	_stagger = maxf(0.0, _stagger - delta * 2.0)
+	_flinch = move_toward(_flinch, 0.0, delta * 3.0)
+	if knocked_down > 0.0:
+		# Лежит после удара дробью и встаёт.
+		knocked_down -= delta
+		move_and_slide()
+		_animate(delta, 0.0)
+		return
 	if not aware:
 		_look_timer -= delta
 		if _look_timer <= 0.0:
@@ -347,12 +360,19 @@ func _animate(delta: float, walking: float) -> void:
 		parts["head"].rotation.z = _head_tilt + sin(_phase * 0.5) * 0.12
 	# Отшатывается назад от попадания: корпус откидывается, голова запрокидывается.
 	if torso and _stagger > 0.0:
-		torso.rotation.x += _stagger * 0.55
+		torso.rotation.x += _stagger * 0.9
 		if parts.has("head"):
-			parts["head"].rotation.x = 0.15 + _stagger * 0.6
+			parts["head"].rotation.x = 0.15 + _stagger * 0.8
+	if torso:
+		torso.rotation.y = _flinch
 	body.position.y = absf(s) * 0.03 * walking
 	if gait == "limp":
 		body.position.y = -maxf(0.0, -s) * 0.06 * walking
+	# Сбит с ног: падает навзничь вокруг пяток, потом поднимается.
+	var fall := 1.4 if knocked_down > 0.35 else 0.0
+	body.rotation.x = lerpf(body.rotation.x, fall, minf(1.0, delta * (14.0 if fall > 0.0 else 5.0)))
+	if body.rotation.x > 0.3:
+		body.position.y = 0.12
 
 
 func _animate_crawl(s: float) -> void:
@@ -443,7 +463,10 @@ func push(dir: Vector3, force: float) -> void:
 	var flat := Vector3(dir.x, 0.0, dir.z).normalized()
 	_knock += flat * force * (0.4 if crawling else 1.0)
 	_knock = _knock.limit_length(MAX_KNOCK)
-	_stagger = minf(1.0, _stagger + force * 0.3)
+	_stagger = minf(1.0, _stagger + force * 0.25)
+	_flinch = clampf(_flinch + randf_range(-0.25, 0.25) * force, -0.6, 0.6)
+	if not crawling and knocked_down <= 0.0 and _knock.length() >= KNOCKDOWN_SPEED:
+		knocked_down = KNOCKDOWN_TIME
 
 
 ## Пуля прошла по краю головы, а не в лоб.
@@ -542,6 +565,7 @@ func _collapse(impulse: Vector3) -> void:
 
 ## Ползёт: на уцелевшей ноге или, если ног не осталось, на руках.
 func _start_crawl() -> void:
+	knocked_down = 0.0
 	var has_l := parts.has("leg_l")
 	var has_r := parts.has("leg_r")
 	crawl_style = "arms" if not (has_l or has_r) else ("left" if has_l else "right")

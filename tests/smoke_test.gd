@@ -175,8 +175,10 @@ func _test_waves() -> void:
 			zk.push(Vector3.BACK, Weapons.stat(w, "knockback"))
 		await _frames(45)
 		dist[w] = Vector2(zk.global_position.x - start.x, zk.global_position.z - start.z).length()
+		if w == "shotgun":
+			_check(zk.knocked_down > 0.0 or zk.body.rotation.x > 1.0, "дробовик в упор сбивает с ног")
 		zk.queue_free()
-	_check(dist["shotgun"] > 0.6 and dist["shotgun"] > dist["smg"] * 2.0, "отдача: дробовик %.2f м, автомат %.2f м" % [dist["shotgun"], dist["smg"]])
+	_check(dist["shotgun"] > 2.0 and dist["shotgun"] > dist["smg"] * 3.0, "отдача: дробовик %.2f м, автомат %.2f м" % [dist["shotgun"], dist["smg"]])
 
 	# Выстрел толкает труп (кусок на слое обломков).
 	var corpse := RigidBody3D.new()
