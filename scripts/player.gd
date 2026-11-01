@@ -25,6 +25,13 @@ const MAX_HP := 100.0
 const MAX_PLAYERS := 4
 const BODY_LAYER_BIT := 10
 const WEAPON_LAYER_BIT := 14
+## Удар ногой: бьёт ближайшего зомби впереди и отшвыривает его, сбивая с ног.
+## Летящий зомби своим телом сбивает тех, кто стоит за ним (см. zombie.gd).
+const KICK_RANGE := 2.0
+const KICK_ANGLE := 0.75
+const KICK_SPEED := 17.0
+const KICK_COOLDOWN := 0.7
+const KICK_DAMAGE := 8.0
 
 var index := 0
 ## Номер геймпада игрока; -1 — только клавиатура и мышь.
@@ -63,6 +70,10 @@ const RELOAD_TURN := Vector3(0.35, 0.0, -0.6)
 const RELOAD_SHIFT := Vector3(-0.05, 0.08, 0.0)
 var _pump: Node3D
 var _hand: Node3D
+var _leg: Node3D
+var kick_cooldown := 0.0
+var _kick_anim := 0.0
+var _kick_was_pressed := false
 
 
 func setup(player_index: int, pad_index: int, cam: Camera3D, hud_node: Control) -> void:
@@ -173,6 +184,8 @@ func take_damage(amount: float) -> void:
 
 func _physics_process(delta: float) -> void:
 	fire_cooldown -= delta
+	kick_cooldown -= delta
+	_kick_anim = maxf(0.0, _kick_anim - delta / KICK_COOLDOWN)
 	if reload_left > 0.0:
 		reload_left -= delta
 		if reload_left <= 0.0:
@@ -183,7 +196,7 @@ func _physics_process(delta: float) -> void:
 	_handle_weapon()
 	_update_camera(delta)
 	_model.rotation.y = yaw
-	_model.animate(delta, Vector2(velocity.x, velocity.z).length(), pitch, downed, reload_progress())
+	_model.animate(delta, Vector2(velocity.x, velocity.z).length(), pitch, downed, reload_progress(), _kick_anim)
 	if hud:
 		var melee: bool = Weapons.stat(current, "melee")
 		var ammo_text := "" if melee else ("перезарядка" if reload_left > 0.0 else "%d / %d" % [mag[current], reserve[current]])
@@ -228,8 +241,12 @@ func _handle_weapon() -> void:
 	var reload := _button(JOY_BUTTON_X)
 	var next := _button(JOY_BUTTON_Y)
 	var share := _button(JOY_BUTTON_B)
+	var kick_pressed := _button(JOY_BUTTON_RIGHT_SHOULDER)
 	if index == 0:
 		share = share or Input.is_physical_key_pressed(KEY_G)
+		kick_pressed = kick_pressed or Input.is_physical_key_pressed(KEY_F)
+		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
+			kick_pressed = true
 		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 			fire = true
 		reload = reload or Input.is_physical_key_pressed(KEY_R)
@@ -243,6 +260,9 @@ func _handle_weapon() -> void:
 	if share and not _share_was_pressed:
 		share_ammo()
 	_share_was_pressed = share
+	if kick_pressed and not _kick_was_pressed and not downed:
+		kick()
+	_kick_was_pressed = kick_pressed
 
 	var melee: bool = Weapons.stat(current, "melee")
 	if reload and not melee:
@@ -261,6 +281,33 @@ func _handle_weapon() -> void:
 		Sfx.play_flat(self, "click", -6.0)
 		if hud:
 			hud.show_message("НЕТ ПАТРОНОВ", 1.0)
+
+
+## Удар ногой. Возвращает зомби, которого задело, или null.
+func kick():
+	if kick_cooldown > 0.0 or downed:
+		return null
+	kick_cooldown = KICK_COOLDOWN
+	_kick_anim = 1.0
+	_shake = maxf(_shake, 0.08)
+	Sfx.play_flat(self, "slash", -6.0, 0.55)
+	var forward := Basis(Vector3.UP, yaw) * Vector3.FORWARD
+	var best = null
+	var best_d := KICK_RANGE
+	for z in get_tree().get_nodes_in_group("zombies"):
+		if z.dead:
+			continue
+		var to: Vector3 = z.global_position - global_position
+		to.y = 0.0
+		var d := to.length()
+		if d < best_d and (d < 0.4 or forward.dot(to / d) > KICK_ANGLE):
+			best_d = d
+			best = z
+	if best == null:
+		return null
+	best.kicked(forward, KICK_SPEED, KICK_DAMAGE)
+	Sfx.play_at(get_parent(), "crunch", best.global_position + Vector3.UP, -4.0, 0.8)
+	return best
 
 
 ## Удар ножом или выстрел из текущего оружия. Возвращает первую задетую зону тела.
@@ -431,6 +478,47 @@ func _update_camera(delta: float) -> void:
 		_weapon.position = Vector3(0.0, 0.0, _kick * 0.08)
 		_weapon.rotation = Vector3(_kick * 0.25, 0.0, 0.0)
 		_animate_reload()
+	_animate_kick()
+
+
+## Нога в кадре: выходит снизу вперёд и уходит обратно.
+func _animate_kick() -> void:
+	if _leg == null:
+		_build_leg()
+	var t := 1.0 - _kick_anim
+	var out := 0.0
+	if _kick_anim > 0.0:
+		out = smoothstep(0.0, 0.1, t) * (1.0 - smoothstep(0.35, 0.75, t))
+	_leg.visible = out > 0.01
+	_leg.position = Vector3(0.1, -1.1, -0.3).lerp(Vector3(0.03, -0.52, -0.6), out)
+	_leg.rotation.x = lerpf(-0.3, 0.55, out)
+	if out > 0.01:
+		_weapon.position += Vector3(0.05, -0.08, 0.05) * out
+
+
+func _build_leg() -> void:
+	_leg = Node3D.new()
+	camera.add_child(_leg)
+	var pants := Kit.shade(0.3)
+	var shoes := Kit.shade(0.1)
+	if _model:
+		var st: Dictionary = PlayerModel.STYLES[_model.style]
+		pants = Kit.shade(st["pants"])
+		shoes = Kit.shade(st["shoes"])
+	var shin := MeshInstance3D.new()
+	shin.mesh = Kit.box(Vector3(0.17, 0.17, 0.7))
+	shin.material_override = pants
+	shin.position = Vector3(0, 0, 0.3)
+	_leg.add_child(shin)
+	var boot := MeshInstance3D.new()
+	boot.mesh = Kit.box(Vector3(0.2, 0.26, 0.17))
+	boot.material_override = shoes
+	boot.position = Vector3(0, 0.02, -0.06)
+	_leg.add_child(boot)
+	for m in [shin, boot]:
+		m.layers = 1 << (WEAPON_LAYER_BIT + index)
+		m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_leg.visible = false
 
 
 ## Доля пройденной перезарядки от 0 до 1, или -1, если оружие не перезаряжается.
