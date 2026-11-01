@@ -55,6 +55,14 @@ var _weapon: Node3D
 var _model: Node3D
 var _gun_mat: StandardMaterial3D
 var _blade_mat: StandardMaterial3D
+## Части оружия, которые двигаются при перезарядке: магазин (или патрон у дробовика),
+## цевьё дробовика и левая рука, которая приносит новый магазин.
+var _mag_part: Node3D
+## Поза оружия в середине перезарядки: нос вверх, низом к центру экрана, чтобы был виден магазин.
+const RELOAD_TURN := Vector3(0.35, 0.0, -0.6)
+const RELOAD_SHIFT := Vector3(-0.05, 0.08, 0.0)
+var _pump: Node3D
+var _hand: Node3D
 
 
 func setup(player_index: int, pad_index: int, cam: Camera3D, hud_node: Control) -> void:
@@ -175,7 +183,7 @@ func _physics_process(delta: float) -> void:
 	_handle_weapon()
 	_update_camera(delta)
 	_model.rotation.y = yaw
-	_model.animate(delta, Vector2(velocity.x, velocity.z).length(), pitch, downed)
+	_model.animate(delta, Vector2(velocity.x, velocity.z).length(), pitch, downed, reload_progress())
 	if hud:
 		var melee: bool = Weapons.stat(current, "melee")
 		var ammo_text := "" if melee else ("перезарядка" if reload_left > 0.0 else "%d / %d" % [mag[current], reserve[current]])
@@ -422,6 +430,71 @@ func _update_camera(delta: float) -> void:
 	else:
 		_weapon.position = Vector3(0.0, 0.0, _kick * 0.08)
 		_weapon.rotation = Vector3(_kick * 0.25, 0.0, 0.0)
+		_animate_reload()
+
+
+## Доля пройденной перезарядки от 0 до 1, или -1, если оружие не перезаряжается.
+func reload_progress() -> float:
+	if reload_left <= 0.0 or Weapons.stat(current, "melee"):
+		return -1.0
+	return clampf(1.0 - reload_left / float(Weapons.stat(current, "reload")), 0.0, 1.0)
+
+
+## Перезарядка в кадре: оружие наклоняется к центру, старый магазин выпадает вниз,
+## левая рука приносит новый и вбивает его. У дробовика рука по одному
+## досылает патроны снизу, в конце цевьё передёргивается.
+func _animate_reload() -> void:
+	var r := reload_progress()
+	if _hand == null:
+		return
+	var hand_rest: Vector3 = _hand.get_meta("rest")
+	if r < 0.0:
+		_hand.position = hand_rest
+		if _mag_part:
+			_mag_part.position = _mag_part.get_meta("rest")
+			_mag_part.visible = current != "shotgun"
+		if _pump:
+			_pump.position = _pump.get_meta("rest")
+		return
+	var tilt := smoothstep(0.0, 0.15, r) * (1.0 - smoothstep(0.85, 1.0, r))
+	# Поворот вокруг самого оружия, а не камеры, иначе оно заслоняет пол-экрана.
+	var pivot := Vector3(0.25, -0.3, -0.55)
+	var turn := Basis.from_euler(RELOAD_TURN * tilt)
+	_weapon.transform = Transform3D(turn, pivot - turn * pivot + RELOAD_SHIFT * tilt)
+	var mag_rest: Vector3 = _mag_part.get_meta("rest")
+	if current == "shotgun":
+		# Три патрона: рука подносит снизу к окну, патрон уходит внутрь.
+		var load := clampf((r - 0.15) / 0.6, 0.0, 0.999)
+		var s := fmod(load * 3.0, 1.0)
+		var up := sin(s * PI)
+		var loading := r > 0.15 and r < 0.75
+		_mag_part.visible = loading and s < 0.6
+		_mag_part.position = mag_rest + Vector3(0.0, -0.22 * (1.0 - up), 0.03 * s)
+		var hand_at := mag_rest + Vector3(-0.02, -0.06 - 0.22 * (1.0 - up), 0.03)
+		var w := smoothstep(0.08, 0.18, r) * (1.0 - smoothstep(0.72, 0.8, r))
+		_hand.position = hand_rest.lerp(hand_at, w)
+		# Передёргивание цевья в конце.
+		var pump := sin(clampf((r - 0.78) / 0.15, 0.0, 1.0) * PI)
+		_pump.position = _pump.get_meta("rest") + Vector3(0, 0, 0.13 * pump)
+		if pump > 0.0:
+			_hand.position = _pump.position + Vector3(0.0, -0.06, 0.0)
+		return
+	# Магазин: выпадает вниз, потом поднимается вместе с рукой и встаёт на место.
+	var drop := smoothstep(0.12, 0.35, r)
+	var insert := smoothstep(0.45, 0.72, r)
+	var below := Vector3(0.0, -0.45, 0.04)
+	if r < 0.4:
+		_mag_part.position = mag_rest + below * drop
+		_mag_part.visible = drop < 0.95
+	else:
+		_mag_part.visible = true
+		_mag_part.position = mag_rest + below * (1.0 - insert)
+	var hand_at := _mag_part.position + Vector3(0.0, -0.06, 0.02)
+	var w := smoothstep(0.32, 0.45, r) * (1.0 - smoothstep(0.78, 0.92, r))
+	# Удар ладонью по магазину в конце.
+	if r > 0.72 and r < 0.8:
+		hand_at += Vector3(0, 0.03 * sin((r - 0.72) / 0.08 * PI), 0)
+	_hand.position = hand_rest.lerp(hand_at, w)
 
 
 func _build_body() -> void:
@@ -486,30 +559,58 @@ func _build_weapon_model() -> void:
 		return
 	for c in _weapon.get_children():
 		c.queue_free()
+	_mag_part = null
+	_pump = null
+	_hand = null
+	var sleeve := Kit.shade(0.3)
+	var skin := Kit.shade(0.75)
 	if _model:
 		_model.set_weapon(current)
 		# Своя рука в рукаве того же тона, что одежда персонажа.
 		var st: Dictionary = PlayerModel.STYLES[_model.style]
-		_add_block(Vector3(0.07, 0.07, 0.3), Vector3(0.29, -0.38, -0.3), 0.3, Kit.shade(st["top"]))
-		_add_block(Vector3(0.06, 0.07, 0.08), Vector3(0.27, -0.33, -0.47), 0.3, Kit.shade(st["skin"]))
+		sleeve = Kit.shade(st["top"])
+		skin = Kit.shade(st["skin"])
+		_add_block(Vector3(0.07, 0.07, 0.3), Vector3(0.29, -0.38, -0.3), 0.3, sleeve)
+		_add_block(Vector3(0.06, 0.07, 0.08), Vector3(0.27, -0.33, -0.47), 0.3, skin)
 	match current:
 		"knife":
 			_add_block(Vector3(0.03, 0.04, 0.12), Vector3(0.24, -0.27, -0.42), 0.4, _gun_mat)
 			_add_block(Vector3(0.012, 0.05, 0.22), Vector3(0.24, -0.22, -0.58), 0.4, _blade_mat)
+			return
 		"pistol":
 			_add_block(Vector3(0.06, 0.08, 0.26), Vector3(0.26, -0.25, -0.55), 0.0, _gun_mat)
 			_add_block(Vector3(0.05, 0.13, 0.07), Vector3(0.26, -0.33, -0.48), 0.25, _gun_mat)
+			_mag_part = _part(Vector3(0.26, -0.4, -0.465))
+			_add_block(Vector3(0.042, 0.1, 0.055), Vector3.ZERO, 0.25, _blade_mat, _mag_part)
 		"smg":
 			_add_block(Vector3(0.07, 0.1, 0.5), Vector3(0.24, -0.24, -0.6), 0.0, _gun_mat)
-			_add_block(Vector3(0.04, 0.18, 0.06), Vector3(0.24, -0.36, -0.62), 0.15, _gun_mat)
 			_add_block(Vector3(0.05, 0.12, 0.07), Vector3(0.24, -0.33, -0.44), 0.25, _gun_mat)
+			_mag_part = _part(Vector3(0.24, -0.36, -0.62))
+			_add_block(Vector3(0.04, 0.2, 0.06), Vector3.ZERO, 0.15, _blade_mat, _mag_part)
 		"shotgun":
 			_add_block(Vector3(0.08, 0.08, 0.75), Vector3(0.23, -0.23, -0.7), 0.0, _gun_mat)
-			_add_block(Vector3(0.1, 0.07, 0.25), Vector3(0.23, -0.29, -0.62), 0.0, _blade_mat)
 			_add_block(Vector3(0.07, 0.14, 0.2), Vector3(0.23, -0.3, -0.3), 0.3, _gun_mat)
+			_pump = _part(Vector3(0.23, -0.29, -0.62))
+			_add_block(Vector3(0.1, 0.07, 0.25), Vector3.ZERO, 0.0, _blade_mat, _pump)
+			# Патрон в левой руке, его видно только при перезарядке.
+			_mag_part = _part(Vector3(0.23, -0.3, -0.45))
+			_add_block(Vector3(0.035, 0.035, 0.08), Vector3.ZERO, 0.0, _blade_mat, _mag_part)
+			_mag_part.visible = false
+	# Левая рука прячется под кадром и появляется на время перезарядки.
+	_hand = _part(Vector3(0.1, -0.9, -0.45))
+	_add_block(Vector3(0.075, 0.075, 0.34), Vector3(-0.06, -0.06, 0.2), 0.5, sleeve, _hand)
+	_add_block(Vector3(0.07, 0.065, 0.09), Vector3.ZERO, 0.0, skin, _hand)
 
 
-func _add_block(size: Vector3, pos: Vector3, tilt: float, mat: Material) -> void:
+func _part(pos: Vector3) -> Node3D:
+	var n := Node3D.new()
+	n.position = pos
+	n.set_meta("rest", pos)
+	_weapon.add_child(n)
+	return n
+
+
+func _add_block(size: Vector3, pos: Vector3, tilt: float, mat: Material, parent: Node3D = null) -> void:
 	var block := MeshInstance3D.new()
 	var box := BoxMesh.new()
 	box.size = size
@@ -519,4 +620,4 @@ func _add_block(size: Vector3, pos: Vector3, tilt: float, mat: Material) -> void
 	block.rotation.x = tilt
 	block.layers = 1 << (WEAPON_LAYER_BIT + index)
 	block.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_weapon.add_child(block)
+	(parent if parent else _weapon).add_child(block)

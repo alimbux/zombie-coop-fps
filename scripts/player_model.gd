@@ -153,7 +153,9 @@ func _layers_of_body() -> int:
 
 
 ## Ходьба, прицеливание и падение. speed — горизонтальная скорость, pitch — наклон взгляда.
-func animate(delta: float, speed: float, pitch: float, downed: bool) -> void:
+## reload — доля пройденной перезарядки (0..1) или -1: оружие опускается и наклоняется,
+## левая рука уходит к магазину.
+func animate(delta: float, speed: float, pitch: float, downed: bool, reload := -1.0) -> void:
 	_phase += delta * speed * 2.2
 	var stride := clampf(speed / 4.5, 0.0, 1.0)
 	var s := sin(_phase)
@@ -164,7 +166,12 @@ func animate(delta: float, speed: float, pitch: float, downed: bool) -> void:
 	_arms[0].rotation = Vector3(aim - 0.05, 0, 0.42)
 	_arms[1].rotation = Vector3(aim, 0, -0.08)
 	_head.rotation.x = pitch * 0.6
-	_gun.rotation.x = pitch * 0.8
+	_gun.rotation = Vector3(pitch * 0.8, 0, 0)
+	if reload >= 0.0:
+		var w := sin(reload * PI)
+		_gun.rotation += Vector3(-0.5, 0, 0.6) * w
+		_arms[0].rotation = Vector3(aim - 0.05 - 0.8 * w, 0, 0.42 - 0.3 * w + sin(reload * 18.0) * 0.08 * w)
+		_head.rotation.x -= 0.35 * w
 	_torso.rotation.x = -0.05 - stride * 0.08
 	_down = move_toward(_down, 1.0 if downed else 0.0, delta * 3.0)
 	rotation.x = _down * 1.45
