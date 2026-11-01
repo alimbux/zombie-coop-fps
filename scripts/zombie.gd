@@ -74,6 +74,8 @@ var _stagger := 0.0
 ## Сколько ещё лежит после сбивания с ног, и поворот корпуса от попадания.
 var knocked_down := 0.0
 var _flinch := 0.0
+## Кого уже сбил, пока летит от удара (чтобы не толкать одного дважды).
+var _bumped: Array = []
 var _skin: StandardMaterial3D
 var _capsule: CapsuleShape3D
 var _capsule_node: CollisionShape3D
@@ -259,6 +261,7 @@ func _physics_process(delta: float) -> void:
 	velocity.x = _knock.x
 	velocity.z = _knock.z
 	_knock *= exp(-delta * 4.5)
+	_bump_others()
 	_stagger = maxf(0.0, _stagger - delta * 2.0)
 	_flinch = move_toward(_flinch, 0.0, delta * 3.0)
 	if knocked_down > 0.0:
@@ -482,6 +485,54 @@ func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3, loud :=
 		_:
 			_sever(zone, point, dir)
 	return dead
+
+
+## Летящий от удара зомби своим телом сбивает тех, в кого врезался, и они летят дальше.
+const BUMP_SPEED := 5.0
+const BUMP_RADIUS := 0.85
+const BUMP_KEEP := 0.85
+
+func _bump_others() -> void:
+	var speed := _knock.length()
+	if speed < BUMP_SPEED:
+		_bumped.clear()
+		return
+	var dir := _knock / speed
+	for other in get_tree().get_nodes_in_group("zombies"):
+		if other == self or other.dead or _bumped.has(other):
+			continue
+		var to: Vector3 = other.global_position - global_position
+		to.y = 0.0
+		if to.length() > BUMP_RADIUS or to.dot(dir) < 0.0:
+			continue
+		_bumped.append(other)
+		other._bumped.append(self)
+		# Передаёт почти всю скорость и сам тормозит о чужое тело.
+		var push_dir := (dir + to.normalized() * 0.5).normalized()
+		other.push(push_dir, speed * BUMP_KEEP)
+		_knock *= 0.55
+		Sfx.play_at(get_parent(), "splat", other.global_position + Vector3.UP, -6.0, 0.7)
+		Sfx.groan(other, "pain", -2.0)
+		speed = _knock.length()
+		if speed < BUMP_SPEED:
+			return
+
+
+## Удар ногой: сильный толчок с падением навзничь и немного урона корпусу.
+func kicked(dir: Vector3, speed: float, damage: float) -> void:
+	if dead:
+		return
+	alert()
+	_bumped.clear()
+	push(dir, speed)
+	# Удар ногой сильнее предела отдачи от пуль.
+	var flat := Vector3(dir.x, 0.0, dir.z).normalized()
+	_knock = flat * speed * (0.4 if crawling else 1.0)
+	if not crawling:
+		knocked_down = KNOCKDOWN_TIME
+	if zone_hp.has("torso"):
+		zone_hp["torso"] = maxf(1.0, zone_hp["torso"] - damage)
+	Sfx.groan(self, "pain", 0.0)
 
 
 ## Отдача: попадание толкает зомби по направлению выстрела. Лежачего — слабее.

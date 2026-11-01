@@ -235,6 +235,36 @@ func _test_waves() -> void:
 	p1.shoot()
 	_check(z5.dead and p1.mag["pistol"] == 11, "нож убивает вплотную и не тратит патроны")
 
+	# Удар ногой: ближайший зомби отлетает и падает, по пути сбивает стоящих за ним.
+	var fwd: Vector3 = Basis(Vector3.UP, p1.yaw) * Vector3.FORWARD
+	var row := []
+	for k in 3:
+		var zk2 = _spawn(world, p1.global_position + fwd * (1.2 + k * 0.75) + Vector3.UP * 0.1)
+		zk2.gait = "walk"
+		row.append(zk2)
+	await _frames(3)
+	var starts := []
+	for zk2 in row:
+		starts.append(zk2.global_position)
+	p1.kick_cooldown = 0.0
+	var kicked_one = p1.kick()
+	_check(kicked_one == row[0], "удар ногой попадает в ближайшего впереди")
+	var downs := [false, false, false]
+	for i in 40:
+		await physics_frame
+		for k in 3:
+			downs[k] = downs[k] or row[k].knocked_down > 0.0
+	var moved := []
+	for k in 3:
+		moved.append((row[k].global_position - starts[k]).dot(fwd))
+	_check(downs[0] and moved[0] > 1.5, "от удара ногой зомби отлетает на %.1f м и падает" % moved[0])
+	_check(downs[1] and moved[1] > 1.0, "летящий зомби сбивает того, кто сзади (%.1f м)" % moved[1])
+	_check(moved[2] > 0.5, "цепочка доходит до третьего (%.1f м)" % moved[2])
+	_check(p1.kick() == null, "удар ногой нельзя повторить сразу")
+	for zk2 in row:
+		zk2.queue_free()
+	await _frames(2)
+
 	# Перезарядка видна: магазин выпадает, левая рука приносит новый и уходит обратно.
 	p1.switch_to("pistol")
 	p1.mag["pistol"] = 2
