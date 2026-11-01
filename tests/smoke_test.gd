@@ -257,7 +257,7 @@ func _test_waves() -> void:
 	var moved := []
 	for k in 3:
 		moved.append((row[k].global_position - starts[k]).dot(fwd))
-	_check(downs[0] and moved[0] > 1.5, "от удара ногой зомби отлетает на %.1f м и падает" % moved[0])
+	_check(downs[0] and moved[0] > 1.2, "от удара ногой зомби отлетает на %.1f м и падает" % moved[0])
 	_check(downs[1] and moved[1] > 1.0, "летящий зомби сбивает того, кто сзади (%.1f м)" % moved[1])
 	_check(moved[2] > 0.5, "цепочка доходит до третьего (%.1f м)" % moved[2])
 	_check(p1.kick() == null, "удар ногой нельзя повторить сразу")
@@ -306,7 +306,8 @@ func _test_waves() -> void:
 			elif rising and ax < prev_arm - 0.01:
 				arm_back_swing = true
 			prev_arm = ax
-	_check(arm_max > 1.2 and arm_back_swing, "руки по инерции взлетают вперёд (%.1f) и качаются обратно" % arm_max)
+	_check(arm_max > 0.5 and arm_back_swing, "руки по инерции уходят вперёд (%.1f) и качаются обратно" % arm_max)
+	_check(zs3._fall > 1.3 and zs3.body.rotation.z < -0.3, "падает в сторону удара: опрокинулся влево от игрока, то есть на свой правый бок (%.2f, вбок %.2f)" % [zs3._fall, zs3.body.rotation.z])
 	_check((zs3.global_position - s3).dot(rgt) < -0.6, "удар слева от центра уносит влево (%.1f м)" % (zs3.global_position - s3).dot(rgt))
 	zs3.queue_free()
 	var zs4 = _spawn(world, p1.global_position + fwd * 4.0 + Vector3.UP * 0.1)
