@@ -1,6 +1,6 @@
 # Сборки Zombie Coop FPS
 
-Готовые сборки на Godot 4.3. Скачать файл: открой его на GitHub и нажми **Download raw file** (или кнопку ⬇).
+Готовые сборки на Godot 4.3 лежат на странице [Releases](https://github.com/alimbux/zombie-coop-fps/releases): открой последний релиз и скачай файл своей платформы в разделе **Assets**.
 
 | Платформа | Файл | Как запустить |
 |---|---|---|
@@ -38,9 +38,16 @@ cd zombie-web && python3 -m http.server 8000
 
 и открыть http://localhost:8000. Сборка без многопоточности, поэтому особые заголовки сервера не нужны: её можно выложить на GitHub Pages или itch.io как есть. В браузере используется упрощённый рендер (Compatibility), геймпады работают в Chrome.
 
-## Как пересобрать
+## Как выпустить новую сборку
 
-Нужны Godot 4.3 и шаблоны экспорта 4.3 (в редакторе: **Editor → Manage Export Templates → Download**). Потом:
+Сборки собирает GitHub Actions (workflow **Release** в `.github/workflows/release.yml`) и сам выкладывает их на страницу Releases. Запустить можно двумя способами:
+
+1. На GitHub: **Actions → Release → Run workflow**, указать тег вроде `v0.2.0`.
+2. Отправить тег: `git tag v0.2.0 && git push origin v0.2.0`.
+
+Сборка идёт около пяти минут: сначала прогоняются тесты, потом экспорт под все платформы, затем появляется релиз с четырьмя архивами.
+
+Собрать у себя: нужны Godot 4.3 и шаблоны экспорта 4.3 (в редакторе: **Editor → Manage Export Templates → Download**). Архивы окажутся в `build/release/`, в git они не попадают.
 
 ```sh
 GODOT=/Applications/Godot.app/Contents/MacOS/Godot tools/export_all.sh
