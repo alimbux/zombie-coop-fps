@@ -80,6 +80,10 @@ var _bumped: Array = []
 var _flail := 0.0
 var _arm_state := {}
 var _arm_pose := {}
+## Вращение всего тела вокруг вертикали, пока летит или лежит после удара.
+var _spin := 0.0
+## Длина рук для расчёта качания (не видимая): у каждой руки своя частота.
+var _arm_len := {"arm_l": 0.35, "arm_r": 0.35}
 var _shoulder_prev := {}
 var _skin: StandardMaterial3D
 var _capsule: CapsuleShape3D
@@ -88,6 +92,7 @@ var _capsule_node: CollisionShape3D
 
 func _ready() -> void:
 	add_to_group("zombies")
+	_arm_len = {"arm_l": randf_range(0.28, 0.42), "arm_r": randf_range(0.28, 0.42)}
 	collision_layer = 2
 	collision_mask = 1 | 2 | 8
 	_capsule = CapsuleShape3D.new()
@@ -272,6 +277,8 @@ func _physics_process(delta: float) -> void:
 	if knocked_down > 0.0:
 		# Лежит после удара дробью и встаёт.
 		knocked_down -= delta
+		rotate_y(_spin * delta)
+		_spin *= exp(-delta * 2.0)
 		move_and_slide()
 		_animate(delta, 0.0)
 		return
@@ -415,7 +422,6 @@ func _animate(delta: float, walking: float) -> void:
 ## рука по инерции уходит вперёд, тело тормозит — рука догоняет и качается обратно,
 ## тело падает навзничь — руки валятся под своим весом. Пока зомби летит от удара
 ## или лежит, мышцы почти расслаблены и руки болтаются свободно.
-const ARM_LEN := 0.35
 const ARM_STIFF := 150.0
 const ARM_LIMP := 3.0
 const ARM_MAX_SPIN := 14.0
@@ -450,12 +456,16 @@ func _animate_flail(delta: float) -> void:
 		var pose_x := pose.x
 		var pose_z := pose.y
 		var k := lerpf(ARM_STIFF, ARM_LIMP, _flail)
-		var c := lerpf(2.0 * sqrt(ARM_STIFF), 1.2, _flail)
+		var c := lerpf(2.0 * sqrt(ARM_STIFF), 0.7, _flail)
 		var hold := 1.0 - _flail
 		# Вперёд-назад: рука (0, -cos, -sin) после поворота на угол вокруг X.
-		var ax: float = _arm_torque_x(st[0], ge) / ARM_LEN + k * (pose_x - st[0]) - c * st[1] - hold * _arm_torque_x(pose_x, gs) / ARM_LEN
+		var arm_len: float = _arm_len[zone]
+		var ax: float = _arm_torque_x(st[0], ge) / arm_len + k * (pose_x - st[0]) - c * st[1] - hold * _arm_torque_x(pose_x, gs) / arm_len
 		# Вбок: рука (sin, -cos, 0) после поворота вокруг Z.
-		var az: float = _arm_torque_z(st[2], ge) / ARM_LEN + k * (pose_z - st[2]) - c * st[3] - hold * _arm_torque_z(pose_z, gs) / ARM_LEN
+		# Поднятая вперёд рука качается вбок слабее (короче плечо силы) — качания
+		# вперёд и вбок связаны, и движение получается неповторяющимся.
+		var lever := maxf(0.2, absf(cos(st[0])))
+		var az: float = _arm_torque_z(st[2], ge) * lever / arm_len + k * (pose_z - st[2]) - c * st[3] - hold * _arm_torque_z(pose_z, gs) / arm_len
 		st[1] = clampf(st[1] + ax * delta, -ARM_MAX_SPIN, ARM_MAX_SPIN)
 		st[3] = clampf(st[3] + az * delta, -ARM_MAX_SPIN, ARM_MAX_SPIN)
 		st[0] += st[1] * delta
@@ -635,6 +645,14 @@ func push(dir: Vector3, force: float) -> void:
 	_knock = _knock.limit_length(MAX_KNOCK)
 	_stagger = minf(1.0, _stagger + force * 0.25)
 	_flinch = clampf(_flinch + randf_range(-0.25, 0.25) * force, -0.6, 0.6)
+	if force > 4.0:
+		# Сильный толчок закручивает тело и дёргает каждую руку по-своему:
+		# дальше их раскачивают инерция, вращение и гравитация.
+		_spin += randf_range(-0.35, 0.35) * force
+		for zone in _arm_state:
+			var st: Array = _arm_state[zone]
+			st[1] += randf_range(-0.6, 0.6) * force
+			st[3] += randf_range(-0.45, 0.45) * force
 	if not crawling and knocked_down <= 0.0 and _knock.length() >= KNOCKDOWN_SPEED:
 		knocked_down = KNOCKDOWN_TIME
 
