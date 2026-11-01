@@ -291,14 +291,22 @@ func _test_waves() -> void:
 	var s3: Vector3 = zs3.global_position
 	p1.kick_cooldown = 0.0
 	p1.kick()
-	var flail_max := 0.0
-	var arm_x := 0.0
-	for i in 30:
+	# Руки по физике: от рывка назад рука по инерции уходит вперёд, потом качается обратно.
+	var arm_max := -10.0
+	var arm_back_swing := false
+	var prev_arm := 0.0
+	var rising := false
+	for i in 40:
 		await physics_frame
-		flail_max = maxf(flail_max, zs3._flail)
 		if zs3.parts.has("arm_l"):
-			arm_x = maxf(arm_x, zs3.parts["arm_l"].rotation.x)
-	_check(flail_max > 0.8 and arm_x > 1.6, "в полёте руки взлетают и болтаются (%.1f)" % arm_x)
+			var ax: float = zs3.parts["arm_l"].rotation.x
+			arm_max = maxf(arm_max, ax)
+			if ax > prev_arm:
+				rising = true
+			elif rising and ax < prev_arm - 0.01:
+				arm_back_swing = true
+			prev_arm = ax
+	_check(arm_max > 1.2 and arm_back_swing, "руки по инерции взлетают вперёд (%.1f) и качаются обратно" % arm_max)
 	_check((zs3.global_position - s3).dot(rgt) < -0.6, "удар слева от центра уносит влево (%.1f м)" % (zs3.global_position - s3).dot(rgt))
 	zs3.queue_free()
 	var zs4 = _spawn(world, p1.global_position + fwd * 4.0 + Vector3.UP * 0.1)

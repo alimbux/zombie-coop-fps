@@ -76,9 +76,11 @@ var knocked_down := 0.0
 var _flinch := 0.0
 ## Кого уже сбил, пока летит от удара (чтобы не толкать одного дважды).
 var _bumped: Array = []
-## Насколько беспорядочно машет руками (летит от удара или падает) и фаза взмахов.
+## Насколько расслаблены руки (1 — болтаются свободно: летит от удара или лежит).
 var _flail := 0.0
-var _flail_phase := 0.0
+var _arm_state := {}
+var _arm_pose := {}
+var _shoulder_prev := {}
 var _skin: StandardMaterial3D
 var _capsule: CapsuleShape3D
 var _capsule_node: CollisionShape3D
@@ -377,8 +379,8 @@ func _animate(delta: float, walking: float) -> void:
 			if zone == _limp_arm:
 				reach = 0.15
 			var sway := sin(_phase * 0.5 + (0.0 if zone == "arm_l" else 1.7)) * 0.12
-			parts[zone].rotation.x = lerpf(parts[zone].rotation.x, reach + sway, minf(1.0, delta * 3.0))
-			parts[zone].rotation.z = 0.08 if zone == "arm_l" else -0.08
+			# Поза, к которой тянут мышцы; саму руку двигает _animate_flail.
+			_arm_pose[zone] = Vector2(reach + sway, 0.08 if zone == "arm_l" else -0.08)
 	if torso:
 		torso.rotation.z = s * 0.07
 		torso.rotation.x = HUNCH - absf(s) * 0.05
@@ -408,32 +410,76 @@ func _animate(delta: float, walking: float) -> void:
 		body.position.y = 0.12
 
 
-## Пока зомби летит от удара или валится с ног, руки болтаются и молотят воздух
-## по инерции: взлетают вперёд к ударившему, расходятся в стороны, ноги дрыгаются.
+## Руки — маятники на плечах. Каждую руку тянет к позе из анимации пружина-мышца,
+## а на неё действуют гравитация и инерция: плечо резко дёрнулось назад —
+## рука по инерции уходит вперёд, тело тормозит — рука догоняет и качается обратно,
+## тело падает навзничь — руки валятся под своим весом. Пока зомби летит от удара
+## или лежит, мышцы почти расслаблены и руки болтаются свободно.
+const ARM_LEN := 0.35
+const ARM_STIFF := 150.0
+const ARM_LIMP := 3.0
+const ARM_MAX_SPIN := 14.0
+
 func _animate_flail(delta: float) -> void:
-	var target := clampf((_knock.length() - 1.5) / 6.0, 0.0, 1.0)
-	if knocked_down > 0.35:
-		target = maxf(target, 0.6)
-	_flail = move_toward(_flail, target, delta * (8.0 if target > _flail else 2.5))
-	if _flail <= 0.01:
+	var target := clampf((_knock.length() - 1.5) / 5.0, 0.0, 1.0)
+	if knocked_down > 0.0:
+		target = 1.0
+	_flail = move_toward(_flail, target, delta * (10.0 if target > _flail else 1.2))
+	if delta <= 0.0:
 		return
-	_flail_phase += delta * (9.0 + 9.0 * _flail)
+	var g := Vector3(0.0, -9.8, 0.0)
 	for zone in ["arm_l", "arm_r"]:
 		if not parts.has(zone):
 			continue
-		var side := -1.0 if zone == "arm_l" else 1.0
-		var ph := _flail_phase + (0.0 if zone == "arm_l" else 2.1)
-		var up := 1.7 + sin(ph) * 1.0
-		var out := side * (0.35 + 0.55 * absf(sin(ph * 0.7 + 0.5)))
 		var arm: Node3D = parts[zone]
-		arm.rotation.x = lerpf(arm.rotation.x, up, _flail)
-		arm.rotation.z = lerpf(arm.rotation.z, out, _flail)
-	for zone in ["leg_l", "leg_r"]:
-		if parts.has(zone):
-			var ph2 := _flail_phase * 0.8 + (0.0 if zone == "leg_l" else PI)
-			parts[zone].rotation.x = lerpf(parts[zone].rotation.x, sin(ph2) * 0.6 - 0.2, _flail * 0.8)
-	if parts.has("head"):
-		parts["head"].rotation.x = lerpf(parts["head"].rotation.x, 0.5 + sin(_flail_phase * 1.3) * 0.3, _flail)
+		var shoulder := arm.global_position
+		var acc := Vector3.ZERO
+		if _shoulder_prev.has(zone):
+			var prev: Array = _shoulder_prev[zone]
+			var vel: Vector3 = (shoulder - prev[0]) / delta
+			acc = ((vel - prev[1]) / delta).limit_length(400.0)
+			_shoulder_prev[zone] = [shoulder, vel]
+		else:
+			_shoulder_prev[zone] = [shoulder, Vector3.ZERO]
+		# Гравитация с учётом ускорения плеча, в осях родителя (корпуса).
+		var basis := (arm.get_parent() as Node3D).global_transform.basis.orthonormalized()
+		var ge: Vector3 = basis.inverse() * (g - acc)
+		var gs: Vector3 = basis.inverse() * g
+		var st: Array = _arm_state.get(zone, [arm.rotation.x, 0.0, arm.rotation.z, 0.0])
+		var pose: Vector2 = _arm_pose.get(zone, Vector2(arm.rotation.x, arm.rotation.z))
+		var pose_x := pose.x
+		var pose_z := pose.y
+		var k := lerpf(ARM_STIFF, ARM_LIMP, _flail)
+		var c := lerpf(2.0 * sqrt(ARM_STIFF), 1.2, _flail)
+		var hold := 1.0 - _flail
+		# Вперёд-назад: рука (0, -cos, -sin) после поворота на угол вокруг X.
+		var ax: float = _arm_torque_x(st[0], ge) / ARM_LEN + k * (pose_x - st[0]) - c * st[1] - hold * _arm_torque_x(pose_x, gs) / ARM_LEN
+		# Вбок: рука (sin, -cos, 0) после поворота вокруг Z.
+		var az: float = _arm_torque_z(st[2], ge) / ARM_LEN + k * (pose_z - st[2]) - c * st[3] - hold * _arm_torque_z(pose_z, gs) / ARM_LEN
+		st[1] = clampf(st[1] + ax * delta, -ARM_MAX_SPIN, ARM_MAX_SPIN)
+		st[3] = clampf(st[3] + az * delta, -ARM_MAX_SPIN, ARM_MAX_SPIN)
+		st[0] += st[1] * delta
+		st[2] += st[3] * delta
+		# Сустав не выворачивается: упор гасит скорость.
+		var lim_x := Vector2(-1.0, 3.1)
+		var lim_z := Vector2(-1.5, 0.25) if zone == "arm_l" else Vector2(-0.25, 1.5)
+		if st[0] < lim_x.x or st[0] > lim_x.y:
+			st[0] = clampf(st[0], lim_x.x, lim_x.y)
+			st[1] *= -0.2
+		if st[2] < lim_z.x or st[2] > lim_z.y:
+			st[2] = clampf(st[2], lim_z.x, lim_z.y)
+			st[3] *= -0.2
+		_arm_state[zone] = st
+		arm.rotation.x = st[0]
+		arm.rotation.z = st[2]
+
+
+static func _arm_torque_x(angle: float, ge: Vector3) -> float:
+	return -cos(angle) * ge.z + sin(angle) * ge.y
+
+
+static func _arm_torque_z(angle: float, ge: Vector3) -> float:
+	return sin(angle) * ge.y + cos(angle) * ge.x
 
 
 func _animate_crawl(s: float) -> void:
