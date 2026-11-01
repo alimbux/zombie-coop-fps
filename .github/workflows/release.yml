@@ -1,0 +1,69 @@
+# Собирает игру под macOS, Windows, Linux и браузер и выкладывает архивы на страницу Releases.
+# Запуск: Actions → Release → Run workflow (указать тег, например v0.2.0) или git push тега v*.
+# В запросах на слияние только проверяет, что тесты проходят и сборка собирается.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Тег релиза, например v0.2.0"
+        required: true
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "tools/export_all.sh"
+      - "export_presets.cfg"
+
+permissions:
+  contents: write
+
+env:
+  GODOT_VERSION: "4.3"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить Godot и шаблоны экспорта
+        run: |
+          cd "$RUNNER_TEMP"
+          base="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
+          wget -q "$base/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q "Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          wget -q "$base/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          unzip -q "Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          mkdir -p "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mv templates/* "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable/"
+          echo "GODOT=$RUNNER_TEMP/Godot_v${GODOT_VERSION}-stable_linux.x86_64" >> "$GITHUB_ENV"
+
+      - name: Тесты
+        run: |
+          "$GODOT" --headless --path . --import || true
+          "$GODOT" --headless --path . -s tests/smoke_test.gd 2>&1 | tee smoke.log
+          grep -q "ГОТОВО: ошибок 0" smoke.log
+
+      - name: Сборка
+        run: tools/export_all.sh
+
+      - name: Выложить релиз
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: Сборка ${{ inputs.tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          files: build/release/*
+          body: |
+            Сборки для macOS, Windows, Linux и браузера из коммита ${{ github.sha }}.
+
+            - macOS: распаковать `ZombieCoopFPS-macOS.zip`, при первом запуске правый клик → «Открыть» (приложение не подписано).
+            - Windows: распаковать `ZombieCoopFPS-Windows-x64.zip`, запустить `ZombieCoopFPS.exe`.
+            - Linux: `tar xzf ZombieCoopFPS-Linux-x64.tar.gz && ./ZombieCoopFPS.x86_64`.
+            - Браузер: распаковать `ZombieCoopFPS-Web.zip` и открыть через локальный веб-сервер.
+
+            Подробнее: [docs/install.md](https://github.com/alimbux/zombie-coop-fps/blob/main/docs/install.md).

@@ -54,7 +54,7 @@
 
 ## Запуск
 
-Готовые сборки для macOS, Windows, Linux и браузера лежат в папке [release/](release/), там же инструкция, как открыть неподписанную сборку на macOS.
+Готовые сборки для macOS, Windows, Linux и браузера лежат на странице [Releases](https://github.com/alimbux/zombie-coop-fps/releases). Как запустить их (в том числе неподписанную сборку на macOS) и как выпустить новую — в [docs/install.md](docs/install.md).
 
 Из исходников: Нужен [Godot 4.3](https://godotengine.org/download) или новее. Откройте папку проекта в Godot и нажмите F5 (Cmd+B на macOS).
 
