@@ -235,6 +235,33 @@ func _test_waves() -> void:
 	p1.shoot()
 	_check(z5.dead and p1.mag["pistol"] == 11, "нож убивает вплотную и не тратит патроны")
 
+	# Перезарядка видна: магазин выпадает, левая рука приносит новый и уходит обратно.
+	p1.switch_to("pistol")
+	p1.mag["pistol"] = 2
+	p1.reserve["pistol"] = 30
+	p1._start_reload()
+	var hand_rest: Vector3 = p1._hand.get_meta("rest")
+	var mag_rest: Vector3 = p1._mag_part.get_meta("rest")
+	var mag_dropped := false
+	var hand_up := 0.0
+	for i in int(Weapons.stat("pistol", "reload") * 0.8 * 60):
+		await physics_frame
+		mag_dropped = mag_dropped or p1._mag_part.position.y < mag_rest.y - 0.2
+		hand_up = maxf(hand_up, p1._hand.position.y - hand_rest.y)
+	_check(mag_dropped and hand_up > 0.3, "перезарядка в кадре: магазин выпал, рука поднялась на %.2f" % hand_up)
+	await _frames(int(Weapons.stat("pistol", "reload") * 0.3 * 60))
+	_check(p1._hand.position.is_equal_approx(hand_rest) and p1.mag["pistol"] == 12, "после перезарядки рука убрана, магазин полный")
+
+	# Конечности отрываются с одного выстрела пистолета, рука — с одной пули автомата.
+	var zl = _spawn(world, Vector3(-6, 0.1, -12))
+	zl.set_physics_process(false)
+	await _frames(2)
+	zl.take_hit("leg_l", Weapons.stat("pistol", "damage"), zl.global_position + Vector3.UP * 0.4, Vector3.FORWARD)
+	_check(not zl.parts.has("leg_l") and zl.crawling, "пистолет отрывает ногу с одного выстрела")
+	zl.take_hit("arm_r", Weapons.stat("smg", "damage"), zl.parts["arm_r"].to_global(Vector3(0, -0.3, 0)), Vector3.FORWARD)
+	_check(not zl.parts.has("arm_r") and not zl.dead, "пуля автомата отрывает руку")
+	_check(Weapons.stat("shotgun", "spread") >= 0.15 and Weapons.stat("shotgun", "pellets") == 10, "у дробовика широкий разлёт")
+
 	p1.switch_to("pistol")
 	p1.mag["pistol"] = 2
 	p1.reserve["pistol"] = 5
