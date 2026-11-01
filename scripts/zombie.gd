@@ -76,6 +76,9 @@ var knocked_down := 0.0
 var _flinch := 0.0
 ## Кого уже сбил, пока летит от удара (чтобы не толкать одного дважды).
 var _bumped: Array = []
+## Насколько беспорядочно машет руками (летит от удара или падает) и фаза взмахов.
+var _flail := 0.0
+var _flail_phase := 0.0
 var _skin: StandardMaterial3D
 var _capsule: CapsuleShape3D
 var _capsule_node: CollisionShape3D
@@ -394,6 +397,7 @@ func _animate(delta: float, walking: float) -> void:
 			parts["head"].rotation.x = 0.15 + _stagger * 0.8
 	if torso:
 		torso.rotation.y = _flinch
+	_animate_flail(delta)
 	body.position.y = absf(s) * 0.03 * walking
 	if gait == "limp":
 		body.position.y = -maxf(0.0, -s) * 0.06 * walking
@@ -402,6 +406,34 @@ func _animate(delta: float, walking: float) -> void:
 	body.rotation.x = lerpf(body.rotation.x, fall, minf(1.0, delta * (14.0 if fall > 0.0 else 5.0)))
 	if body.rotation.x > 0.3:
 		body.position.y = 0.12
+
+
+## Пока зомби летит от удара или валится с ног, руки болтаются и молотят воздух
+## по инерции: взлетают вперёд к ударившему, расходятся в стороны, ноги дрыгаются.
+func _animate_flail(delta: float) -> void:
+	var target := clampf((_knock.length() - 1.5) / 6.0, 0.0, 1.0)
+	if knocked_down > 0.35:
+		target = maxf(target, 0.6)
+	_flail = move_toward(_flail, target, delta * (8.0 if target > _flail else 2.5))
+	if _flail <= 0.01:
+		return
+	_flail_phase += delta * (9.0 + 9.0 * _flail)
+	for zone in ["arm_l", "arm_r"]:
+		if not parts.has(zone):
+			continue
+		var side := -1.0 if zone == "arm_l" else 1.0
+		var ph := _flail_phase + (0.0 if zone == "arm_l" else 2.1)
+		var up := 1.7 + sin(ph) * 1.0
+		var out := side * (0.35 + 0.55 * absf(sin(ph * 0.7 + 0.5)))
+		var arm: Node3D = parts[zone]
+		arm.rotation.x = lerpf(arm.rotation.x, up, _flail)
+		arm.rotation.z = lerpf(arm.rotation.z, out, _flail)
+	for zone in ["leg_l", "leg_r"]:
+		if parts.has(zone):
+			var ph2 := _flail_phase * 0.8 + (0.0 if zone == "leg_l" else PI)
+			parts[zone].rotation.x = lerpf(parts[zone].rotation.x, sin(ph2) * 0.6 - 0.2, _flail * 0.8)
+	if parts.has("head"):
+		parts["head"].rotation.x = lerpf(parts["head"].rotation.x, 0.5 + sin(_flail_phase * 1.3) * 0.3, _flail)
 
 
 func _animate_crawl(s: float) -> void:
@@ -464,7 +496,7 @@ func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3, loud :=
 	if dead or not zone_hp.has(zone):
 		return false
 	alert()
-	push(dir, force)
+	push(_glance_dir(point, dir), force)
 	Gore.splash(get_parent(), point, dir, 16)
 	if zone == "head" and not skull_open and is_glancing(point, dir):
 		_open_skull(point, dir)
@@ -507,15 +539,30 @@ func _bump_others() -> void:
 			continue
 		_bumped.append(other)
 		other._bumped.append(self)
-		# Передаёт почти всю скорость и сам тормозит о чужое тело.
-		var push_dir := (dir + to.normalized() * 0.5).normalized()
+		# Как бильярдные шары: сбитый летит по линии между центрами, ударивший
+		# отскакивает в другую сторону. Чем больше вскользь, тем сильнее разлёт.
+		var line := to.normalized()
+		var push_dir := (line * 0.75 + dir * 0.25).normalized()
 		other.push(push_dir, speed * BUMP_KEEP)
-		_knock *= 0.55
+		var deflect := dir - line * dir.dot(line)
+		_knock = (dir * 0.4 + deflect * 1.2).normalized() * speed * 0.55
 		Sfx.play_at(get_parent(), "splat", other.global_position + Vector3.UP, -6.0, 0.7)
 		Sfx.groan(other, "pain", -2.0)
 		speed = _knock.length()
 		if speed < BUMP_SPEED:
 			return
+
+
+## Направление толчка от пули: попадание сбоку от центра тела уводит зомби вбок.
+func _glance_dir(point: Vector3, dir: Vector3) -> Vector3:
+	var flat := Vector3(dir.x, 0.0, dir.z).normalized()
+	var off := point - global_position
+	off.y = 0.0
+	var side := off - flat * off.dot(flat)
+	var amount := clampf(side.length() / 0.3, 0.0, 1.0) * 0.6
+	if side.length() < 0.001:
+		return flat
+	return (flat + side.normalized() * amount).normalized()
 
 
 ## Удар ногой: сильный толчок с падением навзничь и немного урона корпусу.

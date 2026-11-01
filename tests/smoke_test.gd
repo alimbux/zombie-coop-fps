@@ -265,6 +265,49 @@ func _test_waves() -> void:
 		zk2.queue_free()
 	await _frames(2)
 
+	# Удар не по центру уводит вбок, столкновение вскользь разводит зомби в разные стороны.
+	var rgt: Vector3 = Basis(Vector3.UP, p1.yaw) * Vector3.RIGHT
+	var zs1 = _spawn(world, p1.global_position + fwd * 1.2 + rgt * 0.35 + Vector3.UP * 0.1)
+	var zs2 = _spawn(world, p1.global_position + fwd * 2.4 + rgt * 0.95 + Vector3.UP * 0.1)
+	await _frames(3)
+	var s1: Vector3 = zs1.global_position
+	var s2: Vector3 = zs2.global_position
+	p1.kick_cooldown = 0.0
+	p1.kick()
+	await _frames(40)
+	var side1: float = (zs1.global_position - s1).dot(rgt)
+	var side2: float = (zs2.global_position - s2).dot(rgt)
+	var fwd2: float = (zs2.global_position - s2).dot(fwd)
+	_check(side2 > 0.5 and fwd2 > 0.3, "удар справа от центра: второго уносит вправо (%.1f м вбок)" % side2)
+	var a1: Vector3 = zs1.global_position - s1
+	var a2: Vector3 = zs2.global_position - s2
+	a1.y = 0.0
+	a2.y = 0.0
+	_check(rad_to_deg(a1.angle_to(a2)) > 15.0, "после столкновения вскользь разлетаются в разные стороны (%.0f°)" % rad_to_deg(a1.angle_to(a2)))
+	zs1.queue_free()
+	zs2.queue_free()
+	var zs3 = _spawn(world, p1.global_position + fwd * 1.2 - rgt * 0.4 + Vector3.UP * 0.1)
+	await _frames(3)
+	var s3: Vector3 = zs3.global_position
+	p1.kick_cooldown = 0.0
+	p1.kick()
+	var flail_max := 0.0
+	var arm_x := 0.0
+	for i in 30:
+		await physics_frame
+		flail_max = maxf(flail_max, zs3._flail)
+		if zs3.parts.has("arm_l"):
+			arm_x = maxf(arm_x, zs3.parts["arm_l"].rotation.x)
+	_check(flail_max > 0.8 and arm_x > 1.6, "в полёте руки взлетают и болтаются (%.1f)" % arm_x)
+	_check((zs3.global_position - s3).dot(rgt) < -0.6, "удар слева от центра уносит влево (%.1f м)" % (zs3.global_position - s3).dot(rgt))
+	zs3.queue_free()
+	var zs4 = _spawn(world, p1.global_position + fwd * 4.0 + Vector3.UP * 0.1)
+	zs4.set_physics_process(false)
+	await _frames(2)
+	_check(zs4._glance_dir(zs4.global_position + rgt * 0.2 + Vector3.UP, fwd).dot(rgt) > 0.2, "пуля в правый бок толкает вправо")
+	zs4.queue_free()
+	await _frames(2)
+
 	# Перезарядка видна: магазин выпадает, левая рука приносит новый и уходит обратно.
 	p1.switch_to("pistol")
 	p1.mag["pistol"] = 2
