@@ -76,6 +76,19 @@ var knocked_down := 0.0
 var _flinch := 0.0
 ## Кого уже сбил, пока летит от удара (чтобы не толкать одного дважды).
 var _bumped: Array = []
+## Насколько расслаблены руки (1 — болтаются свободно: летит от удара или лежит).
+var _flail := 0.0
+var _arm_state := {}
+var _arm_pose := {}
+## Вращение всего тела вокруг вертикали, пока летит или лежит после удара.
+var _spin := 0.0
+## Угол и скорость опрокидывания при падении и направление падения в осях зомби.
+var _fall := 0.0
+var _fall_vel := 0.0
+var _fall_dir := Vector2(0, 1)
+## Длина рук для расчёта качания (не видимая): у каждой руки своя частота.
+var _arm_len := {"arm_l": 0.35, "arm_r": 0.35}
+var _shoulder_prev := {}
 var _skin: StandardMaterial3D
 var _capsule: CapsuleShape3D
 var _capsule_node: CollisionShape3D
@@ -83,6 +96,7 @@ var _capsule_node: CollisionShape3D
 
 func _ready() -> void:
 	add_to_group("zombies")
+	_arm_len = {"arm_l": randf_range(0.28, 0.42), "arm_r": randf_range(0.28, 0.42)}
 	collision_layer = 2
 	collision_mask = 1 | 2 | 8
 	_capsule = CapsuleShape3D.new()
@@ -267,6 +281,8 @@ func _physics_process(delta: float) -> void:
 	if knocked_down > 0.0:
 		# Лежит после удара дробью и встаёт.
 		knocked_down -= delta
+		rotate_y(_spin * delta)
+		_spin *= exp(-delta * 2.0)
 		move_and_slide()
 		_animate(delta, 0.0)
 		return
@@ -374,8 +390,8 @@ func _animate(delta: float, walking: float) -> void:
 			if zone == _limp_arm:
 				reach = 0.15
 			var sway := sin(_phase * 0.5 + (0.0 if zone == "arm_l" else 1.7)) * 0.12
-			parts[zone].rotation.x = lerpf(parts[zone].rotation.x, reach + sway, minf(1.0, delta * 3.0))
-			parts[zone].rotation.z = 0.08 if zone == "arm_l" else -0.08
+			# Поза, к которой тянут мышцы; саму руку двигает _animate_flail.
+			_arm_pose[zone] = Vector2(reach + sway, 0.08 if zone == "arm_l" else -0.08)
 	if torso:
 		torso.rotation.z = s * 0.07
 		torso.rotation.x = HUNCH - absf(s) * 0.05
@@ -394,14 +410,137 @@ func _animate(delta: float, walking: float) -> void:
 			parts["head"].rotation.x = 0.15 + _stagger * 0.8
 	if torso:
 		torso.rotation.y = _flinch
+	_animate_flail(delta)
 	body.position.y = absf(s) * 0.03 * walking
 	if gait == "limp":
 		body.position.y = -maxf(0.0, -s) * 0.06 * walking
-	# Сбит с ног: падает навзничь вокруг пяток, потом поднимается.
-	var fall := 1.4 if knocked_down > 0.35 else 0.0
-	body.rotation.x = lerpf(body.rotation.x, fall, minf(1.0, delta * (14.0 if fall > 0.0 else 5.0)))
-	if body.rotation.x > 0.3:
-		body.position.y = 0.12
+	_animate_fall(delta)
+
+
+## Падение — опрокидывание тела вокруг ступней, как у палки, поставленной на пол:
+## толчок даёт начальное вращение, ноги тормозят о пол, а верх тела продолжает
+## лететь, дальше заваливает гравитация (чем ниже, тем быстрее). Падает в ту сторону,
+## куда толкнули, ударяется о пол, немного отскакивает и затихает. Потом встаёт.
+const FALL_COM := 0.95
+const FALL_GROUND := 1.45
+const GET_UP_STIFF := 40.0
+
+func _start_fall() -> void:
+	var d: Vector3 = global_transform.basis.inverse() * Vector3(_knock.x, 0.0, _knock.z)
+	d.y = 0.0
+	if d.length() < 0.01:
+		d = Vector3.BACK
+	d = d.normalized()
+	if _fall < 0.2:
+		_fall_dir = Vector2(d.x, d.z)
+	_fall_vel = maxf(_fall_vel, clampf(_knock.length() * 0.2, 0.8, 4.0))
+
+
+func _animate_fall(delta: float) -> void:
+	if knocked_down > 0.35:
+		# Гравитация опрокидывает, торможение ног о пол переворачивает верх вперёд по ходу.
+		var alpha := 9.8 / FALL_COM * sin(maxf(_fall, 0.05))
+		alpha += 0.5 * 4.5 * _knock.length() * cos(_fall) / FALL_COM
+		_fall_vel += alpha * delta
+		_fall += _fall_vel * delta
+		if _fall >= FALL_GROUND:
+			_fall = FALL_GROUND
+			if _fall_vel > 1.5:
+				# Удар о пол: тело подскакивает, скольжение гасится трением.
+				Sfx.play_at(get_parent(), "splat", global_position + Vector3.UP * 0.2, -6.0, 0.45)
+				_fall_vel = -_fall_vel * 0.28
+				_knock *= 0.55
+				_spin *= 0.4
+				if parts.has("head"):
+					parts["head"].rotation.x += 0.6
+			else:
+				_fall_vel = 0.0
+	else:
+		# Поднимается: мышцы тянут обратно в вертикаль.
+		_fall_vel += (-GET_UP_STIFF * _fall - 2.0 * sqrt(GET_UP_STIFF) * _fall_vel) * delta
+		_fall += _fall_vel * delta
+		if _fall < 0.0:
+			_fall = 0.0
+			_fall_vel = 0.0
+	body.rotation.x = _fall * _fall_dir.y
+	body.rotation.z = -_fall * _fall_dir.x
+	if _fall > 0.3:
+		body.position.y = 0.12 * clampf(_fall / FALL_GROUND, 0.0, 1.0)
+
+
+## Руки — маятники на плечах. Каждую руку тянет к позе из анимации пружина-мышца,
+## а на неё действуют гравитация и инерция: плечо резко дёрнулось назад —
+## рука по инерции уходит вперёд, тело тормозит — рука догоняет и качается обратно,
+## тело падает навзничь — руки валятся под своим весом. Пока зомби летит от удара
+## или лежит, мышцы почти расслаблены и руки болтаются свободно.
+const ARM_STIFF := 150.0
+const ARM_LIMP := 3.0
+const ARM_MAX_SPIN := 14.0
+
+func _animate_flail(delta: float) -> void:
+	var target := clampf((_knock.length() - 1.5) / 5.0, 0.0, 1.0)
+	if knocked_down > 0.0:
+		target = 1.0
+	_flail = move_toward(_flail, target, delta * (10.0 if target > _flail else 1.2))
+	if delta <= 0.0:
+		return
+	var g := Vector3(0.0, -9.8, 0.0)
+	for zone in ["arm_l", "arm_r"]:
+		if not parts.has(zone):
+			continue
+		var arm: Node3D = parts[zone]
+		var shoulder := arm.global_position
+		var acc := Vector3.ZERO
+		if _shoulder_prev.has(zone):
+			var prev: Array = _shoulder_prev[zone]
+			var vel: Vector3 = (shoulder - prev[0]) / delta
+			acc = ((vel - prev[1]) / delta).limit_length(400.0)
+			_shoulder_prev[zone] = [shoulder, vel]
+		else:
+			_shoulder_prev[zone] = [shoulder, Vector3.ZERO]
+		# Гравитация с учётом ускорения плеча, в осях родителя (корпуса).
+		var basis := (arm.get_parent() as Node3D).global_transform.basis.orthonormalized()
+		var ge: Vector3 = basis.inverse() * (g - acc)
+		var gs: Vector3 = basis.inverse() * g
+		var st: Array = _arm_state.get(zone, [arm.rotation.x, 0.0, arm.rotation.z, 0.0])
+		var pose: Vector2 = _arm_pose.get(zone, Vector2(arm.rotation.x, arm.rotation.z))
+		var pose_x := pose.x
+		var pose_z := pose.y
+		var k := lerpf(ARM_STIFF, ARM_LIMP, _flail)
+		var c := lerpf(2.0 * sqrt(ARM_STIFF), 0.7, _flail)
+		var hold := 1.0 - _flail
+		# Вперёд-назад: рука (0, -cos, -sin) после поворота на угол вокруг X.
+		var arm_len: float = _arm_len[zone]
+		var ax: float = _arm_torque_x(st[0], ge) / arm_len + k * (pose_x - st[0]) - c * st[1] - hold * _arm_torque_x(pose_x, gs) / arm_len
+		# Вбок: рука (sin, -cos, 0) после поворота вокруг Z.
+		# Поднятая вперёд рука качается вбок слабее (короче плечо силы) — качания
+		# вперёд и вбок связаны, и движение получается неповторяющимся.
+		var lever := maxf(0.2, absf(cos(st[0])))
+		var az: float = _arm_torque_z(st[2], ge) * lever / arm_len + k * (pose_z - st[2]) - c * st[3] - hold * _arm_torque_z(pose_z, gs) / arm_len
+		st[1] = clampf(st[1] + ax * delta, -ARM_MAX_SPIN, ARM_MAX_SPIN)
+		st[3] = clampf(st[3] + az * delta, -ARM_MAX_SPIN, ARM_MAX_SPIN)
+		st[0] += st[1] * delta
+		st[2] += st[3] * delta
+		# Сустав не выворачивается: упор гасит скорость.
+		var lim_x := Vector2(-1.0, 3.1)
+		var lim_z := Vector2(-1.5, 0.25) if zone == "arm_l" else Vector2(-0.25, 1.5)
+		if st[0] < lim_x.x or st[0] > lim_x.y:
+			st[0] = clampf(st[0], lim_x.x, lim_x.y)
+			st[1] *= -0.2
+		if st[2] < lim_z.x or st[2] > lim_z.y:
+			st[2] = clampf(st[2], lim_z.x, lim_z.y)
+			st[3] *= -0.2
+		_arm_state[zone] = st
+		arm.rotation.x = st[0]
+		arm.rotation.z = st[2]
+
+
+static func _arm_torque_x(angle: float, ge: Vector3) -> float:
+	return -cos(angle) * ge.z + sin(angle) * ge.y
+
+
+static func _arm_torque_z(angle: float, ge: Vector3) -> float:
+	return sin(angle) * ge.y + cos(angle) * ge.x
 
 
 func _animate_crawl(s: float) -> void:
@@ -464,7 +603,7 @@ func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3, loud :=
 	if dead or not zone_hp.has(zone):
 		return false
 	alert()
-	push(dir, force)
+	push(_glance_dir(point, dir), force)
 	Gore.splash(get_parent(), point, dir, 16)
 	if zone == "head" and not skull_open and is_glancing(point, dir):
 		_open_skull(point, dir)
@@ -507,15 +646,30 @@ func _bump_others() -> void:
 			continue
 		_bumped.append(other)
 		other._bumped.append(self)
-		# Передаёт почти всю скорость и сам тормозит о чужое тело.
-		var push_dir := (dir + to.normalized() * 0.5).normalized()
+		# Как бильярдные шары: сбитый летит по линии между центрами, ударивший
+		# отскакивает в другую сторону. Чем больше вскользь, тем сильнее разлёт.
+		var line := to.normalized()
+		var push_dir := (line * 0.75 + dir * 0.25).normalized()
 		other.push(push_dir, speed * BUMP_KEEP)
-		_knock *= 0.55
+		var deflect := dir - line * dir.dot(line)
+		_knock = (dir * 0.4 + deflect * 1.2).normalized() * speed * 0.55
 		Sfx.play_at(get_parent(), "splat", other.global_position + Vector3.UP, -6.0, 0.7)
 		Sfx.groan(other, "pain", -2.0)
 		speed = _knock.length()
 		if speed < BUMP_SPEED:
 			return
+
+
+## Направление толчка от пули: попадание сбоку от центра тела уводит зомби вбок.
+func _glance_dir(point: Vector3, dir: Vector3) -> Vector3:
+	var flat := Vector3(dir.x, 0.0, dir.z).normalized()
+	var off := point - global_position
+	off.y = 0.0
+	var side := off - flat * off.dot(flat)
+	var amount := clampf(side.length() / 0.3, 0.0, 1.0) * 0.6
+	if side.length() < 0.001:
+		return flat
+	return (flat + side.normalized() * amount).normalized()
 
 
 ## Удар ногой: сильный толчок с падением навзничь и немного урона корпусу.
@@ -530,6 +684,7 @@ func kicked(dir: Vector3, speed: float, damage: float) -> void:
 	_knock = flat * speed * (0.4 if crawling else 1.0)
 	if not crawling:
 		knocked_down = KNOCKDOWN_TIME
+		_start_fall()
 	if zone_hp.has("torso"):
 		zone_hp["torso"] = maxf(1.0, zone_hp["torso"] - damage)
 	Sfx.groan(self, "pain", 0.0)
@@ -542,8 +697,17 @@ func push(dir: Vector3, force: float) -> void:
 	_knock = _knock.limit_length(MAX_KNOCK)
 	_stagger = minf(1.0, _stagger + force * 0.25)
 	_flinch = clampf(_flinch + randf_range(-0.25, 0.25) * force, -0.6, 0.6)
+	if force > 4.0:
+		# Сильный толчок закручивает тело и дёргает каждую руку по-своему:
+		# дальше их раскачивают инерция, вращение и гравитация.
+		_spin += randf_range(-0.35, 0.35) * force
+		for zone in _arm_state:
+			var st: Array = _arm_state[zone]
+			st[1] += randf_range(-0.6, 0.6) * force
+			st[3] += randf_range(-0.45, 0.45) * force
 	if not crawling and knocked_down <= 0.0 and _knock.length() >= KNOCKDOWN_SPEED:
 		knocked_down = KNOCKDOWN_TIME
+		_start_fall()
 
 
 ## Пуля прошла по краю головы, а не в лоб.
@@ -643,6 +807,8 @@ func _collapse(impulse: Vector3) -> void:
 ## Ползёт: на уцелевшей ноге или, если ног не осталось, на руках.
 func _start_crawl() -> void:
 	knocked_down = 0.0
+	_fall = 0.0
+	_fall_vel = 0.0
 	var has_l := parts.has("leg_l")
 	var has_r := parts.has("leg_r")
 	crawl_style = "arms" if not (has_l or has_r) else ("left" if has_l else "right")

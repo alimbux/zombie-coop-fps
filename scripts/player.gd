@@ -32,6 +32,8 @@ const KICK_ANGLE := 0.75
 const KICK_SPEED := 17.0
 const KICK_COOLDOWN := 0.7
 const KICK_DAMAGE := 8.0
+## Насколько сильно нецентральный удар уводит вбок (1 — под 45°).
+const KICK_SIDE := 0.8
 
 var index := 0
 ## Номер геймпада игрока; -1 — только клавиатура и мышь.
@@ -305,7 +307,12 @@ func kick():
 			best = z
 	if best == null:
 		return null
-	best.kicked(forward, KICK_SPEED, KICK_DAMAGE)
+	# Удар не по центру уводит зомби вбок: чем дальше от линии взгляда, тем сильнее.
+	var right := Basis(Vector3.UP, yaw) * Vector3.RIGHT
+	var to_best: Vector3 = best.global_position - global_position
+	var off := clampf(to_best.dot(right) / 0.45, -1.0, 1.0)
+	var dir := (forward + right * off * KICK_SIDE).normalized()
+	best.kicked(dir, KICK_SPEED, KICK_DAMAGE)
 	Sfx.play_at(get_parent(), "crunch", best.global_position + Vector3.UP, -4.0, 0.8)
 	return best
 
