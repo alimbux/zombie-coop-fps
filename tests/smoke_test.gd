@@ -161,6 +161,7 @@ func _test_waves() -> void:
 		z3.take_hit("torso", 34.0, z3.global_position + Vector3.UP * 1.0, Vector3.FORWARD)
 		hits += 1
 	_check(z3.dead and hits == 4, "торс убивает за 4 попадания (было %d)" % hits)
+	await _test_bodies(world)
 
 	var p1 = main.players[0]
 	var p2 = main.players[1]
@@ -228,6 +229,8 @@ func _test_waves() -> void:
 	corpse.queue_free()
 	await _frames(1)
 
+	for c in get_nodes_in_group("corpses"):
+		c.free()
 	p1.switch_to("knife")
 	var z5 = _spawn(world, p1.global_position + Vector3(0, 0, -1.2))
 	z5.set_physics_process(false)
@@ -235,6 +238,8 @@ func _test_waves() -> void:
 	p1.shoot()
 	_check(z5.dead and p1.mag["pistol"] == 11, "нож убивает вплотную и не тратит патроны")
 
+	for c in get_nodes_in_group("corpses"):
+		c.free()
 	# Удар ногой: ближайший зомби отлетает и падает, по пути сбивает стоящих за ним.
 	var fwd: Vector3 = Basis(Vector3.UP, p1.yaw) * Vector3.FORWARD
 	var row := []
@@ -390,6 +395,62 @@ func _test_escape() -> void:
 		_check(sleeping > 0, "побег: зомби бродят по этажу и ещё не заметили игроков (%d)" % sleeping)
 		main.queue_free()
 		await _frames(2)
+
+
+## Как в видео: убитый падает целиком и лежит трупом, раненый оседает на колени и ползёт
+## на четвереньках, от пуль тело дёргается, о трупы спотыкаются.
+func _test_bodies(world: Node3D) -> void:
+	await _frames(150)
+	var corpses := get_nodes_in_group("corpses")
+	var lying := 0
+	for c in corpses:
+		if c.dead and not c.is_in_group("zombies") and absf(c.body.rotation.x) + absf(c.body.rotation.z) > 1.2:
+			lying += 1
+	_check(corpses.size() >= 3 and lying == corpses.size(), "убитые падают целиком и лежат трупами (%d из %d)" % [lying, corpses.size()])
+
+	var zj = _spawn(world, Vector3(-10, 0.1, 2))
+	zj.set_physics_process(false)
+	await _frames(2)
+	zj.rotation = Vector3.ZERO
+	var chest: Vector3 = zj.parts["torso"].to_global(Vector3(0, 0.45, 0))
+	zj.take_hit("torso", 10.0, chest, Vector3.BACK)
+	_check(zj._jerk_v.x > 2.0 and zj._hjerk_v.x > 1.0, "пуля в грудь откидывает корпус и запрокидывает голову (%.1f / %.1f)" % [zj._jerk_v.x, zj._hjerk_v.x])
+	zj.queue_free()
+
+	var zk = _spawn(world, Vector3(-12, 0.1, 4))
+	await _frames(2)
+	zk._start_kneel()
+	await _frames(20)
+	_check(zk.crawling and zk.crawl_style == "knees" and zk.body.position.y < -0.25, "раненый оседает на колени (%.2f)" % zk.body.position.y)
+	_check(zk.attack_cooldown < 0.0, "стоя на коленях, издалека не бьёт")
+	var kneel_at: Vector3 = zk.global_position
+	await _frames(120)
+	var crawled := Vector2(zk.global_position.x - kneel_at.x, zk.global_position.z - kneel_at.z).length()
+	_check(zk.parts["torso"].rotation.x < -0.8 and crawled > 0.3, "потом ползёт на четвереньках (наклон %.2f, прополз %.2f м)" % [zk.parts["torso"].rotation.x, crawled])
+	zk.take_hit("torso", 200.0, zk.parts["torso"].global_position, Vector3.FORWARD)
+	await _frames(60)
+	_check(is_instance_valid(zk) and zk.dead and zk._landed, "ползущий обмякает и остаётся лежать")
+
+	# Труп дёргается от пуль и не засчитывается убийством, изрешечённый разваливается.
+	var jerk_before: float = zk._jerk_v.length()
+	zk.hit_corpse("torso", 16.0, zk.parts["torso"].global_position, Vector3.FORWARD, 1.0)
+	_check(zk._jerk_v.length() > jerk_before + 0.5 and is_instance_valid(zk), "труп дёргается от пули")
+	for i in 6:
+		if is_instance_valid(zk) and not zk.is_queued_for_deletion():
+			zk.hit_corpse("torso", 16.0, zk.parts["torso"].global_position, Vector3.FORWARD, 1.0)
+	_check(not is_instance_valid(zk) or zk.is_queued_for_deletion(), "изрешечённый труп разваливается на куски")
+
+	var zt = _spawn(world, Vector3(-12, 0.1, 8))
+	await _frames(2)
+	zt.trip()
+	var fell := 0.0
+	for i in 40:
+		await physics_frame
+		fell = maxf(fell, zt._fall)
+	await _frames(90)
+	_check(fell > 1.0 and zt._fall < 0.3 and not zt.dead, "споткнувшийся падает вперёд и встаёт (%.2f)" % fell)
+	zt.queue_free()
+	await _frames(1)
 
 
 func _spawn(world: Node3D, pos: Vector3):
