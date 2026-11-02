@@ -9,6 +9,7 @@ const GameConfig := preload("res://scripts/game_config.gd")
 const LevelGenerator := preload("res://scripts/level_generator.gd")
 const Pickup := preload("res://scripts/pickup.gd")
 const Weapons := preload("res://scripts/weapons.gd")
+const Sfx := preload("res://scripts/sfx.gd")
 
 var _failures := 0
 
@@ -22,8 +23,17 @@ func _run() -> void:
 	await _test_generator()
 	await _test_waves()
 	await _test_escape()
+	_test_weapon_sounds()
 	print("ГОТОВО: ошибок ", _failures)
 	quit(_failures)
+
+
+func _test_weapon_sounds() -> void:
+	for gun in Sfx.GUNS:
+		for sound in ["shot_", "reload_", "click_"]:
+			var s: AudioStream = Sfx.stream(sound + gun)
+			_check(s != null and s.resource_path.begins_with(Sfx.RECORDED_DIR), "%s%s — запись, а не синтез" % [sound, gun])
+	_check(Sfx._cache["shot_pistol"].size() == 4, "у выстрела 4 варианта")
 
 
 func _test_menu() -> void:

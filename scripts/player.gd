@@ -280,7 +280,7 @@ func _handle_weapon() -> void:
 		_start_reload()
 	else:
 		fire_cooldown = 0.4
-		Sfx.play_flat(self, "click", -6.0)
+		Sfx.play_flat(self, "click_" + current, -2.0)
 		if hud:
 			hud.show_message("НЕТ ПАТРОНОВ", 1.0)
 
@@ -328,12 +328,8 @@ func shoot() -> String:
 		mag[current] -= 1
 		_shake = maxf(_shake, 0.12 + 0.1 * float(stats["pellets"] > 1))
 		_muzzle.light_energy = 6.0
-		var pitch_scale := 1.0
-		if current == "smg":
-			pitch_scale = 1.25
-		elif current == "shotgun":
-			pitch_scale = 0.7
-		Sfx.play_flat(self, "shot", -2.0 if current != "smg" else -5.0, pitch_scale)
+		# Дробовик громче всех, очередь автомата тише одиночного выстрела, чтобы не глушила.
+		Sfx.play_flat(self, "shot_" + current, {"pistol": -4.0, "smg": -6.0, "shotgun": 0.0}.get(current, -4.0))
 		_alert_zombies(stats["noise"])
 	var first := ""
 	var hit_zombies := {}
@@ -433,7 +429,7 @@ func _start_reload() -> void:
 	if reload_left > 0.0 or mag[current] >= size or reserve[current] <= 0:
 		return
 	reload_left = Weapons.stat(current, "reload")
-	Sfx.play_flat(self, "reload", -4.0)
+	Sfx.play_flat(self, "reload_" + current, -3.0)
 
 
 func _finish_reload() -> void:

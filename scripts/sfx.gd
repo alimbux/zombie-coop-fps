@@ -1,10 +1,13 @@
 extends RefCounted
-## Звуки, синтезированные кодом: без сторонних файлов и лицензий.
-## Выстрел, попадание, хруст отрыва, мычание, рык и сдавленный крик зомби, удар по игроку, щелчки затвора.
+## Звуки игры. Почти все синтезированы кодом: попадание, хруст отрыва, мычание, рык и крики зомби, удар по игроку.
+## Оружие звучит настоящими записями (sounds/weapons, лицензия CC0, см. sounds/weapons/LICENSE.md):
+## у пистолета, автомата и дробовика свои выстрел, перезарядка и сухой щелчок пустого магазина.
 ## У каждого звука несколько вариантов, чтобы повторы не резали слух.
 
 const RATE := 22050
 const MAX_GROANS := 6
+const GUNS := ["pistol", "smg", "shotgun"]
+const RECORDED_DIR := "res://sounds/weapons/"
 
 static var _cache := {}
 static var _active_groans := 0
@@ -12,17 +15,34 @@ static var _active_groans := 0
 
 ## Генерирует все звуки заранее, чтобы первый выстрел не подтормаживал.
 static func preload_all() -> void:
-	for sound in ["shot", "splat", "crunch", "groan", "growl", "pain", "hurt", "click", "reload", "slash", "pickup"]:
+	for sound in ["splat", "crunch", "groan", "growl", "pain", "hurt", "slash", "pickup"]:
 		stream(sound)
+	for gun in GUNS:
+		for sound in ["shot_", "reload_", "click_"]:
+			stream(sound + gun)
 
 
-static func stream(sound: String) -> AudioStreamWAV:
+static func stream(sound: String) -> AudioStream:
 	if not _cache.has(sound):
-		var variants: Array = []
-		for v in 4:
-			variants.append(_wav(_synth(sound, v)))
+		var variants := _recorded(sound)
+		if variants.is_empty():
+			for v in 4:
+				variants.append(_wav(_synth(sound, v)))
 		_cache[sound] = variants
 	return _cache[sound].pick_random()
+
+
+## Записанный звук: sound.wav или варианты sound_1.wav … sound_4.wav.
+static func _recorded(sound: String) -> Array:
+	var found: Array = []
+	var single := RECORDED_DIR + sound + ".wav"
+	if ResourceLoader.exists(single):
+		found.append(load(single))
+	for v in range(1, 5):
+		var path := RECORDED_DIR + "%s_%d.wav" % [sound, v]
+		if ResourceLoader.exists(path):
+			found.append(load(path))
+	return found
 
 
 ## Звук в точке мира: громкость и панорама зависят от расстояния до слушателя.
@@ -69,6 +89,9 @@ static func groan(zombie: Node3D, sound := "groan", volume_db := -4.0) -> void:
 static func _synth(sound: String, variant: int) -> PackedFloat32Array:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash(sound) + variant * 7919
+	# Если записей оружия нет, звучит прежний синтезированный выстрел или щелчок.
+	if sound.get_slice("_", 0) in ["shot", "reload", "click"]:
+		sound = sound.get_slice("_", 0)
 	match sound:
 		"shot":
 			return _shot(rng)
