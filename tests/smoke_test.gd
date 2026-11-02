@@ -398,7 +398,7 @@ func _test_escape() -> void:
 
 
 ## Как в видео: убитый падает целиком и лежит трупом, раненый оседает на колени и ползёт
-## на четвереньках, от пуль тело дёргается, о трупы спотыкаются.
+## на четвереньках, от пуль тело дёргается, без попаданий никто не падает.
 func _test_bodies(world: Node3D) -> void:
 	await _frames(150)
 	var corpses := get_nodes_in_group("corpses")
@@ -440,15 +440,17 @@ func _test_bodies(world: Node3D) -> void:
 			zk.hit_corpse("torso", 16.0, zk.parts["torso"].global_position, Vector3.FORWARD, 1.0)
 	_check(not is_instance_valid(zk) or zk.is_queued_for_deletion(), "изрешечённый труп разваливается на куски")
 
-	var zt = _spawn(world, Vector3(-12, 0.1, 8))
+	# Идущий по трупу не падает сам по себе.
+	var zc = _spawn(world, Vector3(-12, 0.1, 8))
 	await _frames(2)
-	zt.trip()
-	var fell := 0.0
-	for i in 40:
+	zc.take_hit("head", 200.0, zc.parts["head"].to_global(Zombie.ZONES["head"]["center"]), Vector3.FORWARD)
+	await _frames(150)
+	var zt = _spawn(world, zc.corpse_center + Vector3.UP * 0.1)
+	var fell := false
+	for i in 120:
 		await physics_frame
-		fell = maxf(fell, zt._fall)
-	await _frames(90)
-	_check(fell > 1.0 and zt._fall < 0.3 and not zt.dead, "споткнувшийся падает вперёд и встаёт (%.2f)" % fell)
+		fell = fell or zt.knocked_down > 0.0 or zt._fall > 0.05 or zt.crawling
+	_check(zc._landed and not fell, "идущий по трупу не падает сам по себе")
 	zt.queue_free()
 	await _frames(1)
 

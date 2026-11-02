@@ -34,8 +34,6 @@ const KNEE_POS := Vector3(0.0, 0.46, 0.0)
 const MAX_CORPSES := 30
 ## Прочность трупа: сколько ещё нужно всадить, чтобы он развалился на куски.
 const CORPSE_HP := 70.0
-## С какой вероятностью идущий зомби спотыкается о лежащий труп.
-const TRIP_CHANCE := 0.35
 
 ## pivot — шарнир (у головы и рук — относительно торса), size/center — зона попадания
 ## относительно шарнира.
@@ -120,10 +118,7 @@ var _death_timer := 0.0
 var _fall_pivot := Vector3.ZERO
 var _torso_rest := Vector3.ZERO
 var _landed := false
-## О какие трупы уже спотыкался или перешагнул, и когда смотреть под ноги снова.
-var _tripped: Array = []
-var _trip_timer := 0.0
-## Середина лежащего трупа (о неё спотыкаются).
+## Середина лежащего трупа.
 var corpse_center := Vector3.ZERO
 
 static var _corpses: Array = []
@@ -335,14 +330,6 @@ func _physics_process(delta: float) -> void:
 		return
 	if _kneel > 0.0:
 		_kneel -= delta
-	_trip_timer -= delta
-	if _trip_timer <= 0.0:
-		_trip_timer = 0.1
-		_check_trip()
-		if knocked_down > 0.0:
-			move_and_slide()
-			_animate(delta, 0.0)
-			return
 	var moving := false
 	var target = _nearest_player()
 	if target != null:
@@ -1236,30 +1223,3 @@ func hit_corpse(zone: String, damage: float, point: Vector3, dir: Vector3, force
 			Sfx.play_at(get_parent(), "crunch", point, -2.0)
 			_remove_part(zone)
 
-
-## Идущий зомби наступил на труп: иногда спотыкается и падает вперёд, потом встаёт.
-func _check_trip() -> void:
-	if crawling or knocked_down > 0.0 or _fall > 0.05 or not aware:
-		return
-	for c in _corpses:
-		if not is_instance_valid(c) or not c._landed or _tripped.has(c):
-			continue
-		var to: Vector3 = c.corpse_center - global_position
-		to.y = 0.0
-		if to.length() > 0.6:
-			continue
-		_tripped.append(c)
-		if randf() < TRIP_CHANCE:
-			trip()
-		return
-
-
-func trip() -> void:
-	var fwd := -global_transform.basis.z
-	fwd.y = 0.0
-	_knock = fwd.normalized() * 2.5
-	knocked_down = KNOCKDOWN_TIME * 0.8
-	_fall_dir = Vector2(randf_range(-0.3, 0.3), -1.0).normalized()
-	_fall_vel = 2.2
-	_hjerk_v.x -= 4.0
-	Sfx.groan(self, "growl", -4.0)
