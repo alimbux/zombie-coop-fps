@@ -14,15 +14,14 @@ const MAX_GROANS := 6
 ##   spatter — кровь брызгами шлёпает по полу и стенам;
 ##   tear — мясо рвётся (отрыв предплечья, руки, ноги).
 const HIT_SOUNDS := ["hit_flesh", "hit_bone", "hit_skull", "squelch", "spatter", "tear"]
-## Голоса зомби, кроме мычания, рыка и сдавленного крика:
+## Вскрики зомби — звучат только от попаданий (мычание при ходьбе и рык при атаке прежние):
 ##   yelp — короткий резкий вскрик «ах!» от пули;
 ##   shriek — пронзительный хриплый визг (оторвало руку, раскололо череп);
 ##   gurgle — бульканье кровью в горле;
 ##   howl — протяжный вой, когда подогнулись колени;
 ##   death — предсмертный хрип, тон падает и переходит в клёкот;
-##   snarl — злобное шипение-рык, когда заметил игрока;
-##   hiss — сиплое дыхание ползущего.
-const VOICE_SOUNDS := ["yelp", "shriek", "gurgle", "howl", "death", "snarl", "hiss"]
+##   snarl — рёв боли сквозь зубы.
+const VOICE_SOUNDS := ["yelp", "shriek", "gurgle", "howl", "death", "snarl"]
 
 static var _cache := {}
 static var _active_groans := 0
@@ -73,13 +72,16 @@ static func play_flat(parent: Node, sound: String, volume_db := 0.0, pitch := 1.
 ## voice — высота голоса этого зомби: у каждого свой, от низкого хрипа до сиплого крика.
 static func groan(zombie: Node3D, sound := "groan", volume_db := -4.0, voice := 1.0) -> void:
 	var pos := zombie.global_position + Vector3.UP * 1.5
-	if sound != "groan" and sound != "hiss":
+	if sound == "growl":
+		play_at(zombie.get_parent(), sound, pos, volume_db, randf_range(0.9, 1.1))
+		return
+	if sound != "groan":
 		play_at(zombie.get_parent(), sound, pos, volume_db, voice * randf_range(0.9, 1.02))
 		return
 	if _active_groans >= MAX_GROANS:
 		return
 	_active_groans += 1
-	var p := play_at(zombie.get_parent(), sound, pos, volume_db, voice * randf_range(0.88, 1.02))
+	var p := play_at(zombie.get_parent(), sound, pos, volume_db, randf_range(0.85, 1.15))
 	p.tree_exited.connect(func(): _active_groans -= 1)
 
 
@@ -90,7 +92,7 @@ static func _synth(sound: String, variant: int) -> PackedFloat32Array:
 	rng.seed = hash(sound) + variant * 7919
 	var out := _synth_raw(sound, rng)
 	# Попадания и шипение глушим: звонкие верха делают их игрушечными.
-	if sound in HIT_SOUNDS or sound in ["snarl", "hiss", "gurgle", "splat", "crunch"]:
+	if sound in HIT_SOUNDS or sound in ["snarl", "gurgle", "splat", "crunch"]:
 		out = _dark(out, 0.22 if sound in ["hit_bone", "hit_skull", "crunch"] else 0.3)
 	return out
 
@@ -143,8 +145,6 @@ static func _synth_raw(sound: String, rng: RandomNumberGenerator) -> PackedFloat
 			return _death_rattle(rng)
 		"snarl":
 			return _snarl(rng)
-		"hiss":
-			return _hiss(rng)
 	return PackedFloat32Array()
 
 
@@ -238,27 +238,6 @@ static func _snarl(rng: RandomNumberGenerator) -> PackedFloat32Array:
 	for i in int(length * 0.4 * RATE):
 		var u := float(i) / (length * 0.4 * RATE)
 		out[i] += bp.step(rng.randf_range(-1.0, 1.0), 1600.0) * sin(PI * u) * 0.5
-	return out
-
-
-## Сиплое дыхание ползущего: два-три хриплых вдоха-выдоха.
-static func _hiss(rng: RandomNumberGenerator) -> PackedFloat32Array:
-	var length := rng.randf_range(1.0, 1.6)
-	var n := int(length * RATE)
-	var out := PackedFloat32Array()
-	out.resize(n)
-	var breaths := rng.randi_range(2, 3)
-	var bp := Band.new()
-	bp.q = 0.9
-	var lp := 0.0
-	for i in n:
-		var u := float(i) / n
-		var b := fmod(u * breaths, 1.0)
-		var env := sin(PI * b) * (0.6 + 0.4 * float(int(u * breaths) % 2))
-		var noise := rng.randf_range(-1.0, 1.0)
-		lp += (noise - lp) * 0.2
-		var rasp := 0.6 + 0.4 * absf(lp) * 3.0
-		out[i] = (bp.step(noise, lerpf(500.0, 900.0, b)) * 0.8 + lp * 0.5) * env * rasp
 	return out
 
 
@@ -568,6 +547,54 @@ static func _roughen(rng: RandomNumberGenerator, out: PackedFloat32Array, depth:
 		out[i] *= 1.0 - depth + depth * clampf(g * 1.6 - 0.2, 0.0, 1.0)
 
 
+## Исходный голос без мрачной обработки: им звучит мычание при ходьбе и рык при атаке,
+## как было с самого начала.
+static func _voice_plain(rng: RandomNumberGenerator, length: float, pitch: Vector3, keys: Array, breath: float, fry: float, jitter: float, muffle: float) -> PackedFloat32Array:
+	var n := int(RATE * length)
+	var out := PackedFloat32Array()
+	out.resize(n)
+	var phase := 0.0
+	var odd := false
+	var prev_g := 0.0
+	var drift := 0.0
+	var lp := 0.0
+	var bandwidth := [90.0, 130.0, 200.0]
+	var weight := [1.0, 0.7, 0.45]
+	var y1 := [0.0, 0.0, 0.0]
+	var y2 := [0.0, 0.0, 0.0]
+	for i in n:
+		var u := float(i) / n
+		# Высота тона: от начала к пику на 30% и вниз к концу, плюс дрожание.
+		var f0 := lerpf(pitch.x, pitch.y, u / 0.3) if u < 0.3 else lerpf(pitch.y, pitch.z, (u - 0.3) / 0.7)
+		drift = clampf(drift + rng.randf_range(-1.0, 1.0) * 0.02, -1.0, 1.0)
+		f0 *= 1.0 + drift * jitter + 0.02 * sin(TAU * 4.5 * u * length)
+		phase += f0 / RATE
+		if phase >= 1.0:
+			phase -= 1.0
+			odd = not odd
+		var g := 0.0
+		if phase < 0.4:
+			g = 0.5 * (1.0 - cos(PI * phase / 0.4))
+		elif phase < 0.56:
+			g = cos(PI * 0.5 * (phase - 0.4) / 0.16)
+		var src := (g - prev_g) * 12.0 * (1.0 - fry * 0.6 if odd else 1.0)
+		prev_g = g
+		src += rng.randf_range(-1.0, 1.0) * breath
+		var k := _key(keys, u)
+		var sum := 0.0
+		for f in 3:
+			var theta: float = TAU * k[f] / RATE
+			var r := exp(-PI * bandwidth[f] / RATE)
+			var v: float = (1.0 - r) * src + 2.0 * r * cos(theta) * y1[f] - r * r * y2[f]
+			y2[f] = y1[f]
+			y1[f] = v
+			# Без поправки высокие форманты почти не слышны, и голос превращается в гул.
+			sum += v * weight[f] * 2.0 * sin(theta)
+		lp += (sum - lp) * (1.0 - muffle)
+		out[i] = lp * k[3]
+	return out
+
+
 ## Значение ключей гласной в момент u (линейная интерполяция).
 static func _key(keys: Array, u: float) -> Array:
 	for j in range(1, keys.size()):
@@ -583,7 +610,7 @@ static func _key(keys: Array, u: float) -> Array:
 ## Мычание: закрытый рот «м-м» переходит в глухое «у-о» и обратно.
 static func _moan(rng: RandomNumberGenerator) -> PackedFloat32Array:
 	var s := rng.randf_range(0.85, 1.15)
-	return _voice(rng, rng.randf_range(1.3, 2.0), Vector3(64, 74, 52) * s, [
+	return _voice_plain(rng, rng.randf_range(1.3, 2.0), Vector3(95, 112, 78) * s, [
 		[0.0, 260.0, 1000.0, 2300.0, 0.0],
 		[0.12, 270.0, 950.0, 2300.0, 0.6],
 		[0.35, 330.0, 800.0, 2300.0, 0.9],
@@ -596,7 +623,7 @@ static func _moan(rng: RandomNumberGenerator) -> PackedFloat32Array:
 ## Рык при атаке: короткое хриплое «а-гх».
 static func _growl(rng: RandomNumberGenerator) -> PackedFloat32Array:
 	var s := rng.randf_range(0.9, 1.1)
-	return _voice(rng, 0.5, Vector3(56, 64, 42) * s, [
+	return _voice_plain(rng, 0.5, Vector3(90, 105, 70) * s, [
 		[0.0, 600.0, 1100.0, 2400.0, 0.0],
 		[0.08, 650.0, 1150.0, 2400.0, 1.0],
 		[0.7, 550.0, 1000.0, 2400.0, 0.8],

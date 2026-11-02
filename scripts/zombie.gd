@@ -320,11 +320,8 @@ func _physics_process(delta: float) -> void:
 	_groan_timer -= delta
 	if _groan_timer <= 0.0:
 		_groan_timer = randf_range(4.0, 9.0) if aware else randf_range(7.0, 15.0)
-		if crawling:
-			# Ползущий сипит, булькает или стонет.
-			_say(["hiss", "gurgle", "groan"].pick_random(), -5.0)
-		else:
-			_say("groan", -4.0)
+		# Бродячее мычание — прежнее, новые вскрики звучат только от попаданий.
+		Sfx.groan(self, "groan", -4.0)
 	if not is_on_floor():
 		velocity.y -= GRAVITY * delta
 	velocity.x = _knock.x
@@ -373,7 +370,7 @@ func _physics_process(delta: float) -> void:
 			moving = true
 		elif attack_cooldown <= 0.0:
 			attack_cooldown = ATTACK_INTERVAL
-			_say(["growl", "growl", "snarl"].pick_random(), 0.0)
+			Sfx.groan(self, "growl", 0.0)
 			target.take_damage(_attack_damage())
 	move_and_slide()
 	_leave_trail()
@@ -755,8 +752,6 @@ func alert() -> void:
 		return
 	aware = true
 	_groan_timer = randf_range(1.5, 3.0)
-	if randf() < 0.7:
-		_say("snarl", -2.0)
 
 
 ## Замечает игрока рядом или в прямой видимости.
@@ -799,8 +794,10 @@ func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3, loud :=
 			_open_skull(point, dir)
 		if loud:
 			_hit_sound(zone, point)
-			if randf() < 0.6:
-				var cries: Array = ["pain", "yelp", "gurgle"] if zone == "head" or zone == "torso" else ["pain", "yelp", "yelp"]
+			# Почти каждое попадание — вскрик: короткий «ах», сдавленный крик, рёв боли,
+			# бульканье кровью (голова, корпус).
+			if randf() < 0.8:
+				var cries: Array = ["pain", "yelp", "gurgle", "snarl", "yelp"] if zone == "head" or zone == "torso" else ["pain", "yelp", "snarl", "yelp"]
 				_say(cries.pick_random(), -2.0)
 		# Простреленная нога или изрешечённый корпус: подгибаются колени,
 		# зомби падает на колени и дальше ползёт на четвереньках.
