@@ -10,8 +10,15 @@ const DEBRIS_LAYER := 16
 
 static var _blood_mat: StandardMaterial3D
 static var _brain_mat: StandardMaterial3D
+static var _dark_mat: StandardMaterial3D
+static var _meat_mat: StandardMaterial3D
+static var _hole_mat: StandardMaterial3D
+static var _bone_mat: StandardMaterial3D
+static var _chunk_mesh: BoxMesh
 static var _layer := 0
 static var _drop_mesh: BoxMesh
+static var _streak_mesh: BoxMesh
+static var _fade_curve: Curve
 static var _stains: Array = []
 static var _debris: Array = []
 
@@ -22,6 +29,76 @@ static func blood_material() -> StandardMaterial3D:
 		_blood_mat.albedo_color = Color(0.9, 0.0, 0.03)
 		_blood_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	return _blood_mat
+
+
+## Тёмная запёкшаяся кровь: ей пропитывается одежда, из неё куски мяса.
+static func dark_blood_material() -> StandardMaterial3D:
+	if _dark_mat == null:
+		_dark_mat = StandardMaterial3D.new()
+		# Без освещения, как и яркая кровь, иначе в тени фильтр сделает её серой.
+		_dark_mat.albedo_color = Color(0.38, 0.0, 0.02)
+		_dark_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	return _dark_mat
+
+
+## Мясо в ране: влажное, с бликом, фильтр оставляет его красным.
+static func meat_material() -> StandardMaterial3D:
+	if _meat_mat == null:
+		_meat_mat = StandardMaterial3D.new()
+		_meat_mat.albedo_color = Color(0.75, 0.12, 0.14)
+		_meat_mat.roughness = 0.25
+		_meat_mat.metallic_specular = 0.8
+	return _meat_mat
+
+
+## Чёрная глубина пулевого отверстия.
+static func hole_material() -> StandardMaterial3D:
+	if _hole_mat == null:
+		_hole_mat = StandardMaterial3D.new()
+		_hole_mat.albedo_color = Color(0.03, 0.0, 0.0)
+		_hole_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	return _hole_mat
+
+
+## Торчащая кость, рёбра.
+static func bone_material() -> StandardMaterial3D:
+	if _bone_mat == null:
+		_bone_mat = StandardMaterial3D.new()
+		_bone_mat.albedo_color = Color(0.92, 0.9, 0.85)
+		_bone_mat.roughness = 0.5
+	return _bone_mat
+
+
+static func basis_from_up(up: Vector3) -> Basis:
+	return _basis_from_up(up)
+
+
+## Куски мяса, вылетающие из раны: тёмно-красные комки разного размера летят по пуле
+## и вбок, падают на пол.
+static func chunks(world: Node3D, point: Vector3, dir: Vector3, amount: int) -> void:
+	if _chunk_mesh == null:
+		_chunk_mesh = BoxMesh.new()
+		_chunk_mesh.size = Vector3.ONE * 0.045
+		_chunk_mesh.material = dark_blood_material()
+	var p := CPUParticles3D.new()
+	p.one_shot = true
+	p.amount = maxi(amount, 1)
+	p.lifetime = 1.1
+	p.explosiveness = 1.0
+	p.direction = (dir.normalized() + Vector3.UP * 0.4).normalized()
+	p.spread = 50.0
+	p.initial_velocity_min = 1.5
+	p.initial_velocity_max = 5.0
+	p.gravity = Vector3(0, -16, 0)
+	p.angular_velocity_min = -400.0
+	p.angular_velocity_max = 400.0
+	p.scale_amount_min = 0.5
+	p.scale_amount_max = 1.2
+	p.mesh = _chunk_mesh
+	world.add_child(p)
+	p.global_position = point
+	p.emitting = true
+	world.get_tree().create_timer(1.6).timeout.connect(p.queue_free)
 
 
 ## Небольшое попадание: брызги по направлению пули и пятно на стене за целью.
@@ -92,7 +169,7 @@ static func bleed(holder: Node3D, local_pos: Vector3, out: Vector3, seconds: flo
 	p.gravity = Vector3(0, -12, 0)
 	p.scale_amount_min = 0.4
 	p.scale_amount_max = 0.9
-	p.mesh = _drop()
+	_falling(p)
 	p.position = local_pos
 	holder.add_child(p)
 	p.emitting = true
@@ -212,7 +289,7 @@ static func _particles(world: Node3D, point: Vector3, dir: Vector3, amount: int,
 	p.gravity = Vector3(0, -14, 0)
 	p.scale_amount_min = 0.5
 	p.scale_amount_max = 1.3
-	p.mesh = _drop()
+	_falling(p)
 	world.add_child(p)
 	p.global_position = point
 	p.emitting = true
@@ -229,7 +306,7 @@ static func _blood_trail(world: Node3D, rb: RigidBody3D) -> void:
 	p.initial_velocity_min = 0.5
 	p.initial_velocity_max = 1.5
 	p.gravity = Vector3(0, -14, 0)
-	p.mesh = _drop()
+	_falling(p)
 	rb.add_child(p)
 	p.emitting = true
 	_stop_later(p, 1.2)
@@ -270,9 +347,39 @@ static func _stain_ray(world: Node3D, from: Vector3, to: Vector3, radius: float,
 		"smear":
 			stretch = randf_range(1.2, 1.8)
 	var w := radius * randf_range(0.8, 1.25)
-	stain.scale = Vector3(w, 1.0, w * stretch * randf_range(0.9, 1.15))
+	var len_k := stretch * randf_range(0.9, 1.15)
+	# Пятно не должно свисать с края стены, колонны или ступеньки: проверяем, что
+	# под краями тоже есть та же поверхность. Если нет — уменьшаем, а не вешаем в воздух.
+	var fits := false
+	for attempt in 3:
+		if _covered(space, stain.global_transform, w, w * len_k):
+			fits = true
+			break
+		w *= 0.55
+	if not fits:
+		stain.free()
+		return null
+	stain.scale = Vector3(w, 1.0, w * len_k)
 	_track(_stains, stain, MAX_STAINS)
 	return stain
+
+
+## Поместится ли пятно с полуосями hx, hz на поверхность в этом месте.
+static func fits(world: Node3D, xf: Transform3D, hx: float, hz: float) -> bool:
+	return _covered(world.get_world_3d().direct_space_state, xf, hx, hz)
+
+
+## Лежит ли прямоугольник пятна (полуоси hx, hz) целиком на плоской поверхности.
+static func _covered(space: PhysicsDirectSpaceState3D, xf: Transform3D, hx: float, hz: float) -> bool:
+	var n := xf.basis.y.normalized()
+	# Края текстуры прозрачные, сама клякса занимает примерно 70% квадрата.
+	for c in [Vector2(1, 1), Vector2(-1, 1), Vector2(1, -1), Vector2(-1, -1), Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1)]:
+		var at: Vector3 = xf.origin + xf.basis.x.normalized() * hx * 0.7 * c.x + xf.basis.z.normalized() * hz * 0.7 * c.y
+		var q := PhysicsRayQueryParameters3D.create(at + n * 0.06, at - n * 0.06, WORLD_MASK)
+		var hit := space.intersect_ray(q)
+		if hit.is_empty() or (hit["normal"] as Vector3).dot(n) < 0.9:
+			return false
+	return true
 
 
 ## Пятно на полу под точкой (капли с ран, след ползущего).
@@ -286,6 +393,27 @@ static func _basis_from_up(up: Vector3) -> Basis:
 	var x := ref.cross(y).normalized()
 	var z := x.cross(y).normalized()
 	return Basis(x, y, z)
+
+
+## Капли летят, вытягиваясь по скорости (видно, что падают, а не висят), и к концу
+## жизни тают, а не пропадают разом посреди воздуха.
+static func _falling(p: CPUParticles3D) -> void:
+	p.mesh = _streak()
+	p.particle_flag_align_y = true
+	if _fade_curve == null:
+		_fade_curve = Curve.new()
+		_fade_curve.add_point(Vector2(0.0, 1.0))
+		_fade_curve.add_point(Vector2(0.6, 0.85))
+		_fade_curve.add_point(Vector2(1.0, 0.0))
+	p.scale_amount_curve = _fade_curve
+
+
+static func _streak() -> BoxMesh:
+	if _streak_mesh == null:
+		_streak_mesh = BoxMesh.new()
+		_streak_mesh.size = Vector3(0.028, 0.075, 0.028)
+		_streak_mesh.material = blood_material()
+	return _streak_mesh
 
 
 static func _drop() -> BoxMesh:

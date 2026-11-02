@@ -20,23 +20,36 @@ const ATTACK_INTERVAL := 1.0
 const GRAVITY := 18.0
 const HUNCH := -0.25
 const ARM_REACH := 1.45
-const MAX_WOUNDS := 8
+const MAX_WOUNDS := 22
+## Сколько ран на части тела, после которых одежда в этом месте пропитывается кровью.
+const SOAK_EVERY := 3
+## Локоть: где у руки шарнир предплечья (по оси руки от плеча).
+const ELBOW_Y := -0.3
+## Когда у руки остаётся меньше этой доли прочности, пули отрывают предплечье с кистью.
+const FOREARM_TEAR := 0.6
 const MAX_KNOCK := 14.0
 ## Если отдача разогнала зомби сильнее этого (дробовик в упор), он падает навзничь.
 const KNOCKDOWN_SPEED := 9.0
 const KNOCKDOWN_TIME := 1.4
 ## Насколько далеко от центра головы должна пройти пуля, чтобы задеть её вскользь.
 const GLANCE_DISTANCE := 0.09
+## На сколько опускается тело, когда зомби стоит на коленях, и где колено в осях тела.
+const KNEEL_SINK := 0.4
+const KNEE_POS := Vector3(0.0, 0.46, 0.0)
+## Сколько трупов лежит на уровне одновременно: самые старые убираются.
+const MAX_CORPSES := 30
+## Прочность трупа: сколько ещё нужно всадить, чтобы он развалился на куски.
+const CORPSE_HP := 160.0
 
 ## pivot — шарнир (у головы и рук — относительно торса), size/center — зона попадания
 ## относительно шарнира.
 const ZONES := {
-	"torso": {"pivot": Vector3(0.0, 0.88, 0.0), "size": Vector3(0.5, 0.66, 0.32), "center": Vector3(0.0, 0.32, 0.0), "hp": 110.0, "mult": 1.0},
-	"head": {"pivot": Vector3(0.0, 0.6, 0.0), "size": Vector3(0.3, 0.34, 0.32), "center": Vector3(0.0, 0.16, -0.02), "hp": 30.0, "mult": 3.0},
-	"arm_l": {"pivot": Vector3(-0.25, 0.5, 0.0), "size": Vector3(0.15, 0.72, 0.15), "center": Vector3(0.0, -0.34, 0.0), "hp": 20.0, "mult": 1.0},
-	"arm_r": {"pivot": Vector3(0.25, 0.5, 0.0), "size": Vector3(0.15, 0.72, 0.15), "center": Vector3(0.0, -0.34, 0.0), "hp": 20.0, "mult": 1.0},
-	"leg_l": {"pivot": Vector3(-0.12, 0.88, 0.0), "size": Vector3(0.2, 0.88, 0.24), "center": Vector3(0.0, -0.44, -0.02), "hp": 26.0, "mult": 1.0},
-	"leg_r": {"pivot": Vector3(0.12, 0.88, 0.0), "size": Vector3(0.2, 0.88, 0.24), "center": Vector3(0.0, -0.44, -0.02), "hp": 26.0, "mult": 1.0},
+	"torso": {"pivot": Vector3(0.0, 0.88, 0.0), "size": Vector3(0.5, 0.66, 0.32), "center": Vector3(0.0, 0.32, 0.0), "hp": 260.0, "mult": 1.0},
+	"head": {"pivot": Vector3(0.0, 0.6, 0.0), "size": Vector3(0.3, 0.34, 0.32), "center": Vector3(0.0, 0.16, -0.02), "hp": 110.0, "mult": 1.5},
+	"arm_l": {"pivot": Vector3(-0.25, 0.5, 0.0), "size": Vector3(0.15, 0.72, 0.15), "center": Vector3(0.0, -0.34, 0.0), "hp": 70.0, "mult": 1.0},
+	"arm_r": {"pivot": Vector3(0.25, 0.5, 0.0), "size": Vector3(0.15, 0.72, 0.15), "center": Vector3(0.0, -0.34, 0.0), "hp": 70.0, "mult": 1.0},
+	"leg_l": {"pivot": Vector3(-0.12, 0.88, 0.0), "size": Vector3(0.2, 0.88, 0.24), "center": Vector3(0.0, -0.44, -0.02), "hp": 90.0, "mult": 1.0},
+	"leg_r": {"pivot": Vector3(0.12, 0.88, 0.0), "size": Vector3(0.2, 0.88, 0.24), "center": Vector3(0.0, -0.44, -0.02), "hp": 90.0, "mult": 1.0},
 }
 
 var zone_hp := {}
@@ -52,6 +65,8 @@ var gait := "walk"
 var skull_open := false
 var attack_cooldown := 0.0
 var speed_jitter := 1.0
+## Высота голоса: у каждого зомби свой, от низкого хрипа до сиплого крика.
+var voice := 1.0
 var level = null
 ## Заметил ли игроков. В режиме волн зомби сразу знают, где все; на этажах — стоят, пока не заметят.
 var aware := true
@@ -63,6 +78,10 @@ var _limp_arm := ""
 var _bad_leg := "leg_r"
 var _head_tilt := 0.0
 var _wounds := 0
+## Сколько ран на каждой части тела (для пропитывания одежды кровью).
+var _part_wounds := {}
+## Насколько разворочена каждая часть тела (0 — нет, 1 — сильно, 2 — в клочья).
+var _gore_stage := {}
 var _stumps := 0
 ## Сколько прошёл с последней отметки на полу и где была прошлая отметка.
 var _trail_left := 0.0
@@ -92,6 +111,29 @@ var _shoulder_prev := {}
 var _skin: StandardMaterial3D
 var _capsule: CapsuleShape3D
 var _capsule_node: CollisionShape3D
+## Коленные суставы: голень с ботинком сгибается относительно бедра.
+var _knees := {}
+## Пружины рывков от попаданий: отклонение корпуса (наклон, поворот, крен) и головы
+## (кивок, крен). Пружины мягкие, поэтому тело дёргается, перелетает и качается обратно.
+var _jerk := Vector3.ZERO
+var _jerk_v := Vector3.ZERO
+var _hjerk := Vector2.ZERO
+var _hjerk_v := Vector2.ZERO
+## Стоит на коленях после ранения: сколько ещё, прежде чем опуститься на руки и поползти.
+var _kneel := 0.0
+## Насколько опустилось тело (подогнулись колени).
+var _sink := 0.0
+## Смерть: "buckle" — подгибаются колени, "topple" — валится, "lying" — лежит трупом.
+var death_stage := ""
+var _death_timer := 0.0
+## Вокруг какой точки (в осях тела) опрокидывается: ступни или колени.
+var _fall_pivot := Vector3.ZERO
+var _torso_rest := Vector3.ZERO
+var _landed := false
+## Середина лежащего трупа.
+var corpse_center := Vector3.ZERO
+
+static var _corpses: Array = []
 
 
 func _ready() -> void:
@@ -108,6 +150,7 @@ func _ready() -> void:
 	add_child(_capsule_node)
 
 	speed_jitter = randf_range(0.8, 1.3)
+	voice = randf_range(0.78, 1.05)
 	_groan_timer = randf_range(0.5, 4.0)
 	_phase = randf_range(0.0, TAU)
 	_head_tilt = randf_range(-0.35, 0.35)
@@ -200,23 +243,30 @@ func _build_body() -> void:
 		var arm := _pivot(zone, torso)
 		var sleeve := shirt if randf() < 0.6 else _skin
 		Kit.add(arm, Kit.capsule(0.056, 0.34), sleeve, Vector3(0, -0.15, 0))
-		Kit.add(arm, Kit.capsule(0.048, 0.32), _skin, Vector3(0, -0.44, -0.02), Vector3(0.15, 0, 0))
-		Kit.add(arm, Kit.box(Vector3(0.075, 0.1, 0.035)), _skin, Vector3(0, -0.63, -0.04))
-		Kit.add(arm, Kit.box(Vector3(0.065, 0.07, 0.02)), Kit.shade(0.3), Vector3(0, -0.7, -0.06), Vector3(0.6, 0, 0))
+		# Предплечье с кистью на локте: пули отрывают его раньше, чем всю руку.
+		var elbow := Kit.joint(arm, Vector3(0, ELBOW_Y, 0), "Elbow")
+		elbow.set_meta("hit_size", Vector3(0.12, 0.42, 0.12))
+		elbow.set_meta("hit_center", Vector3(0, -0.2, -0.02))
+		Kit.add(elbow, Kit.capsule(0.048, 0.32), _skin, Vector3(0, -0.14, -0.02), Vector3(0.15, 0, 0))
+		Kit.add(elbow, Kit.box(Vector3(0.075, 0.1, 0.035)), _skin, Vector3(0, -0.33, -0.04))
+		Kit.add(elbow, Kit.box(Vector3(0.065, 0.07, 0.02)), Kit.shade(0.3), Vector3(0, -0.4, -0.06), Vector3(0.6, 0, 0))
 		if randf() < 0.45:
 			# Пальцы в крови.
-			Kit.add(arm, Kit.box(Vector3(0.068, 0.04, 0.024)), Gore.blood_material(), Vector3(0, -0.73, -0.075), Vector3(0.6, 0, 0))
+			Kit.add(elbow, Kit.box(Vector3(0.068, 0.04, 0.024)), Gore.blood_material(), Vector3(0, -0.43, -0.075), Vector3(0.6, 0, 0))
 		if randf() < 0.25:
 			# Сломанная кость торчит из предплечья.
-			Kit.add(arm, Kit.capsule(0.016, 0.12), bone, Vector3(0.03, -0.42, -0.06), Vector3(0.9, 0, 0.5))
-			Kit.add(arm, Kit.sphere(0.03), Gore.blood_material(), Vector3(0.02, -0.42, -0.04), Vector3.ZERO, Vector3(1, 1, 0.5))
-		Kit.add(arm, Kit.sphere(0.03), rot, Vector3(randf_range(-0.03, 0.03), randf_range(-0.55, -0.35), -0.04), Vector3.ZERO, Vector3(1, 1.4, 0.5))
+			Kit.add(elbow, Kit.capsule(0.016, 0.12), bone, Vector3(0.03, -0.12, -0.06), Vector3(0.9, 0, 0.5))
+			Kit.add(elbow, Kit.sphere(0.03), Gore.blood_material(), Vector3(0.02, -0.12, -0.04), Vector3.ZERO, Vector3(1, 1, 0.5))
+		Kit.add(elbow, Kit.sphere(0.03), rot, Vector3(randf_range(-0.03, 0.03), randf_range(-0.25, -0.05), -0.04), Vector3.ZERO, Vector3(1, 1.4, 0.5))
 
 	for zone in ["leg_l", "leg_r"]:
 		var leg := _pivot(zone, body)
 		Kit.add(leg, Kit.capsule(0.076, 0.46), pants, Vector3(0, -0.21, 0))
-		Kit.add(leg, Kit.capsule(0.063, 0.44), pants if randf() < 0.7 else _skin, Vector3(0, -0.62, 0.02))
-		Kit.add(leg, Kit.box(Vector3(0.1, 0.07, 0.23)), dark if randf() < 0.75 else _skin, Vector3(0, -0.85, -0.05))
+		# Голень на коленном суставе: зомби может упасть на колени и ползти на четвереньках.
+		var knee := Kit.joint(leg, Vector3(0, -0.42, 0), "Knee")
+		Kit.add(knee, Kit.capsule(0.063, 0.44), pants if randf() < 0.7 else _skin, Vector3(0, -0.2, 0.02))
+		Kit.add(knee, Kit.box(Vector3(0.1, 0.07, 0.23)), dark if randf() < 0.75 else _skin, Vector3(0, -0.43, -0.05))
+		_knees[zone] = knee
 
 
 ## Гниющее лицо: пятна, оскал зубов, кровавая слюна, у кого-то прогнившая щека.
@@ -264,11 +314,13 @@ func _pivot(zone: String, parent: Node3D) -> Node3D:
 
 func _physics_process(delta: float) -> void:
 	if dead:
+		_corpse_process(delta)
 		return
 	attack_cooldown -= delta
 	_groan_timer -= delta
 	if _groan_timer <= 0.0:
 		_groan_timer = randf_range(4.0, 9.0) if aware else randf_range(7.0, 15.0)
+		# Бродячее мычание — прежнее, новые вскрики звучат только от попаданий.
 		Sfx.groan(self, "groan", -4.0)
 	if not is_on_floor():
 		velocity.y -= GRAVITY * delta
@@ -294,6 +346,8 @@ func _physics_process(delta: float) -> void:
 		move_and_slide()
 		_animate(delta, 0.0)
 		return
+	if _kneel > 0.0:
+		_kneel -= delta
 	var moving := false
 	var target = _nearest_player()
 	if target != null:
@@ -307,8 +361,10 @@ func _physics_process(delta: float) -> void:
 			look_at(global_position + step, Vector3.UP)
 		if dist > ATTACK_RANGE:
 			var dir := step.normalized()
-			# Пока отшатывается от попаданий, вперёд почти не идёт.
+			# Пока отшатывается от попаданий, вперёд почти не идёт; стоя на коленях — стоит.
 			var speed := _move_speed() * (1.0 - minf(_stagger, 0.85))
+			if _kneel > 0.0:
+				speed = 0.0
 			velocity.x += dir.x * speed
 			velocity.z += dir.z * speed
 			moving = true
@@ -353,12 +409,15 @@ func _move_speed() -> float:
 				return WALK_SPEED * 0.8 * speed_jitter * (0.35 + 1.1 * maxf(0.0, sin(_phase)))
 		return WALK_SPEED * speed_jitter
 	var surge: float
-	if crawl_style == "arms":
+	if crawl_style == "knees":
+		# На четвереньках: шаг рукой и коленом — рывок, между шагами почти стоит.
+		surge = 0.4 + 1.1 * absf(sin(_phase))
+	elif crawl_style == "arms":
 		surge = 0.25 + 1.2 * absf(cos(_phase))
 	else:
 		surge = 0.35 + 1.3 * maxf(0.0, sin(_phase))
 	var arms := int(parts.has("arm_l")) + int(parts.has("arm_r"))
-	var factor := 0.75 if crawl_style == "arms" else 1.0
+	var factor := 0.75 if crawl_style == "arms" else (1.3 if crawl_style == "knees" else 1.0)
 	if arms < 2:
 		factor *= 0.7
 	return CRAWL_SPEED * speed_jitter * surge * factor
@@ -372,8 +431,9 @@ func _animate(delta: float, walking: float) -> void:
 	_phase += delta * rate * maxf(walking, 0.25)
 	var s := sin(_phase)
 	var torso: Node3D = parts.get("torso")
+	_update_jerk(delta)
 	if crawling:
-		_animate_crawl(s)
+		_animate_crawl(s, delta)
 		return
 	for zone in ["leg_l", "leg_r"]:
 		if parts.has(zone):
@@ -403,13 +463,17 @@ func _animate(delta: float, walking: float) -> void:
 			torso.rotation.z = bad_side * (0.08 + maxf(0.0, -s) * 0.22) * maxf(walking, 0.3)
 	if parts.has("head"):
 		parts["head"].rotation.z = _head_tilt + sin(_phase * 0.5) * 0.12
-	# Отшатывается назад от попадания: корпус откидывается, голова запрокидывается.
-	if torso and _stagger > 0.0:
-		torso.rotation.x += _stagger * 0.9
-		if parts.has("head"):
-			parts["head"].rotation.x = 0.15 + _stagger * 0.8
+	# Отшатывается от попадания: корпус дёргается туда, куда толкнула пуля, перелетает
+	# и качается обратно, голова мотается отдельно.
 	if torso:
-		torso.rotation.y = _flinch
+		torso.rotation.x += _stagger * 0.35 + _jerk.x
+		torso.rotation.z += _jerk.z
+		torso.rotation.y = _flinch + _jerk.y
+	if parts.has("head"):
+		parts["head"].rotation.x = 0.15 + _stagger * 0.3 + _hjerk.x
+		parts["head"].rotation.z += _hjerk.y
+	for zone in _knees:
+		_knees[zone].rotation.x = 0.0
 	_animate_flail(delta)
 	body.position.y = absf(s) * 0.03 * walking
 	if gait == "limp":
@@ -479,7 +543,7 @@ const ARM_MAX_SPIN := 14.0
 
 func _animate_flail(delta: float) -> void:
 	var target := clampf((_knock.length() - 1.5) / 5.0, 0.0, 1.0)
-	if knocked_down > 0.0:
+	if knocked_down > 0.0 or dead:
 		target = 1.0
 	_flail = move_toward(_flail, target, delta * (10.0 if target > _flail else 1.2))
 	if delta <= 0.0:
@@ -543,9 +607,12 @@ static func _arm_torque_z(angle: float, ge: Vector3) -> float:
 	return sin(angle) * ge.y + cos(angle) * ge.x
 
 
-func _animate_crawl(s: float) -> void:
+func _animate_crawl(s: float, delta: float) -> void:
 	var torso: Node3D = parts["torso"]
 	match crawl_style:
+		"knees":
+			_animate_knees(s, delta)
+			return
 		"arms":
 			# Лежит на животе и подтягивается руками по очереди: одна тянется вперёд,
 			# другая упирается и тащит тело.
@@ -569,8 +636,114 @@ func _animate_crawl(s: float) -> void:
 			torso.rotation = Vector3(0.1, lean + s * 0.06, 0)
 			body.position.y = 0.16 + maxf(0.0, s) * 0.04
 	if parts.has("head"):
-		parts["head"].rotation.x = -0.8
-		parts["head"].rotation.z = _head_tilt * 0.5
+		parts["head"].rotation.x = -0.8 + _hjerk.x
+		parts["head"].rotation.z = _head_tilt * 0.5 + _hjerk.y
+	torso.rotation += _jerk * 0.6
+	var leg_left := "leg_l" if crawl_style == "left" else "leg_r"
+	if _knees.has(leg_left):
+		_knees[leg_left].rotation.x = -0.35 - 0.25 * s
+
+
+## На коленях, потом на четвереньках. Сначала тело оседает (подгибаются колени),
+## зомби покачивается, стоя на коленях, руки висят. Потом валится вперёд на руки
+## и ползёт: рука и противоположное колено шагают вместе, спина ходит вверх-вниз.
+func _animate_knees(s: float, delta: float) -> void:
+	var torso: Node3D = parts["torso"]
+	_sink = move_toward(_sink, KNEEL_SINK, delta * 2.6)
+	var bend := _sink / KNEEL_SINK
+	# 1 — стоит на коленях прямо, 0 — на четвереньках.
+	var up := smoothstep(0.0, 0.45, _kneel)
+	var down := 1.0 - up
+	body.rotation = Vector3.ZERO
+	body.position = Vector3(0, -_sink + down * absf(s) * 0.03, 0)
+	for zone in ["leg_l", "leg_r"]:
+		if not parts.has(zone):
+			continue
+		var side := 1.0 if zone == "leg_l" else -1.0
+		parts[zone].rotation = Vector3(down * (0.15 + 0.22 * s * side), 0, 0.05 * side)
+		_knees[zone].rotation.x = -1.5 * bend + down * 0.18 * s * side
+	var sway := sin(_phase * 0.7)
+	torso.rotation = Vector3(lerpf(HUNCH - 0.1, -1.08, down) + _jerk.x, _jerk.y + down * s * 0.08, up * sway * 0.14 + _jerk.z)
+	for zone in ["arm_l", "arm_r"]:
+		if parts.has(zone):
+			var side := 1.0 if zone == "arm_l" else -1.0
+			var hang := 0.25 + sway * 0.1 * side
+			parts[zone].rotation = Vector3(lerpf(hang, 1.08 - 0.38 * s * side, down), 0, 0.1 * side)
+	if parts.has("head"):
+		parts["head"].rotation.x = lerpf(0.25 + sway * 0.1, 0.95, down) + _hjerk.x
+		parts["head"].rotation.z = _head_tilt + _hjerk.y
+
+
+## Пружины рывков: тянут отклонение обратно к нулю, но слабо затухают — тело
+## перелетает положение равновесия и пару раз качается.
+const JERK_STIFF := 120.0
+const JERK_DAMP := 9.0
+const HEAD_STIFF := 150.0
+const HEAD_DAMP := 8.0
+
+func _update_jerk(delta: float) -> void:
+	_jerk_v += (-JERK_STIFF * _jerk - JERK_DAMP * _jerk_v) * delta
+	_jerk += _jerk_v * delta
+	_jerk = _jerk.clamp(Vector3(-1.2, -0.9, -0.8), Vector3(1.0, 0.9, 0.8))
+	_hjerk_v += (-HEAD_STIFF * _hjerk - HEAD_DAMP * _hjerk_v) * delta
+	_hjerk += _hjerk_v * delta
+	_hjerk = _hjerk.clamp(Vector2(-1.0, -0.9), Vector2(1.3, 0.9))
+
+
+## Рывок от пули: куда и как дёрнется тело, зависит от зоны и точки попадания.
+## В грудь — корпус откидывается назад, голова запрокидывается; в живот — сгибается
+## пополам; в бок — разворачивает и кренит; в голову — голову резко отбрасывает;
+## в ногу — заваливается вперёд на раненую ногу; в руку — руку отшвыривает.
+func _jolt(zone: String, point: Vector3, dir: Vector3, force: float) -> void:
+	var ld: Vector3 = global_transform.basis.orthonormalized().inverse() * dir.normalized()
+	var f := clampf(force, 0.6, 8.0)
+	var lp: Vector3 = to_local(point)
+	match zone:
+		"head":
+			_hjerk_v += Vector2(ld.z * 4.5, -ld.x * 3.0 + randf_range(-1.5, 1.5)) * f
+			_jerk_v += Vector3(ld.z * 1.0, 0, -ld.x * 0.6) * f
+		"torso":
+			var belly: bool = parts.has("torso") and (parts["torso"] as Node3D).to_local(point).y < 0.22
+			if belly and randf() < 0.7:
+				# В живот: сгибается пополам, голова падает вперёд.
+				_jerk_v.x -= absf(ld.z) * 2.6 * f
+				_hjerk_v.x -= 1.6 * f
+			else:
+				_jerk_v.x += ld.z * 2.8 * f
+				_hjerk_v.x += ld.z * 2.4 * f
+			_jerk_v.z += -ld.x * 1.6 * f
+			_jerk_v.y += clampf(-lp.x * 6.0, -1.5, 1.5) * signf(ld.z if absf(ld.z) > 0.1 else 1.0) * f
+		"leg_l", "leg_r":
+			var side := 1.0 if zone == "leg_l" else -1.0
+			_jerk_v += Vector3(-1.6, 0, side * 1.4) * f
+			_hjerk_v.x -= 1.0 * f
+		"arm_l", "arm_r":
+			var st: Array = _arm_state.get(zone, [])
+			if st.size() == 4:
+				st[1] -= ld.z * 3.0 * f
+				st[3] += -ld.x * 2.0 * f
+			_jerk_v.y += (0.8 if zone == "arm_l" else -0.8) * ld.z * f
+	_jerk_v = _jerk_v.limit_length(16.0)
+	_hjerk_v = _hjerk_v.limit_length(18.0)
+
+
+## Подогнулись колени: зомби оседает на колени, покачивается и опускается на руки.
+func _start_kneel() -> void:
+	if crawling or dead or knocked_down > 0.0 or _fall > 0.05:
+		return
+	crawling = true
+	crawl_style = "knees"
+	_kneel = randf_range(0.7, 1.4)
+	_stagger = 0.0
+	_arm_state.clear()
+	_capsule.height = 1.1
+	_capsule_node.position.y = 0.55
+	_say("howl", -1.0)
+
+
+## Голос этого зомби: звук со своей высотой.
+func _say(sound: String, volume_db := -2.0) -> void:
+	Sfx.groan(self, sound, volume_db, voice)
 
 
 ## Зомби услышал выстрел или его задели: идёт к игрокам.
@@ -578,7 +751,7 @@ func alert() -> void:
 	if aware or dead:
 		return
 	aware = true
-	_groan_timer = randf_range(0.0, 0.6)
+	_groan_timer = randf_range(1.5, 3.0)
 
 
 ## Замечает игрока рядом или в прямой видимости.
@@ -604,7 +777,9 @@ func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3, loud :=
 		return false
 	alert()
 	push(_glance_dir(point, dir), force)
-	Gore.splash(get_parent(), point, dir, 16)
+	_jolt(zone, point, dir, force)
+	Gore.splash(get_parent(), point, dir, 24)
+	Gore.chunks(get_parent(), point, dir, randi_range(2, 5) + (3 if zone == "head" else 0))
 	if zone == "head" and not skull_open and is_glancing(point, dir):
 		_open_skull(point, dir)
 		return false
@@ -612,9 +787,24 @@ func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3, loud :=
 	zone_hp[zone] -= damage * float(def["mult"])
 	if zone_hp[zone] > 0.0:
 		_add_wound(zone, point, dir)
+		if zone.begins_with("arm") and zone_hp[zone] < float(def["hp"]) * FOREARM_TEAR:
+			_tear_forearm(zone, dir)
+		# Разбитая пулями голова раскалывается: верх черепа слетает, но зомби ещё жив.
+		if zone == "head" and not skull_open and zone_hp["head"] < float(def["hp"]) * 0.5:
+			_open_skull(point, dir)
 		if loud:
-			Sfx.play_at(get_parent(), "splat", point, -8.0)
-			Sfx.groan(self, "pain", -2.0)
+			_hit_sound(zone, point)
+			# Почти каждое попадание — вскрик: короткий «ах», сдавленный крик, рёв боли,
+			# бульканье кровью (голова, корпус).
+			if randf() < 0.8:
+				var cries: Array = ["pain", "yelp", "gurgle", "snarl", "yelp"] if zone == "head" or zone == "torso" else ["pain", "yelp", "snarl", "yelp"]
+				_say(cries.pick_random(), -2.0)
+		# Простреленная нога или изрешечённый корпус: подгибаются колени,
+		# зомби падает на колени и дальше ползёт на четвереньках.
+		if zone.begins_with("leg") and randf() < 0.6:
+			_start_kneel()
+		elif zone == "torso" and zone_hp[zone] < float(def["hp"]) * 0.45 and randf() < 0.5:
+			_start_kneel()
 		return false
 	match zone:
 		"head":
@@ -654,7 +844,7 @@ func _bump_others() -> void:
 		var deflect := dir - line * dir.dot(line)
 		_knock = (dir * 0.4 + deflect * 1.2).normalized() * speed * 0.55
 		Sfx.play_at(get_parent(), "splat", other.global_position + Vector3.UP, -6.0, 0.7)
-		Sfx.groan(other, "pain", -2.0)
+		other._say(["pain", "yelp"].pick_random(), -2.0)
 		speed = _knock.length()
 		if speed < BUMP_SPEED:
 			return
@@ -687,7 +877,7 @@ func kicked(dir: Vector3, speed: float, damage: float) -> void:
 		_start_fall()
 	if zone_hp.has("torso"):
 		zone_hp["torso"] = maxf(1.0, zone_hp["torso"] - damage)
-	Sfx.groan(self, "pain", 0.0)
+	_say(["pain", "yelp", "growl"].pick_random(), 0.0)
 
 
 ## Отдача: попадание толкает зомби по направлению выстрела. Лежачего — слабее.
@@ -722,24 +912,289 @@ func is_glancing(point: Vector3, dir: Vector3) -> bool:
 
 
 ## Рана: кровавое пятно на теле и струйка крови, бьющая из него несколько секунд.
+## Рваная рана, а не пятно: чёрная дыра, вокруг неровный край из клочьев крови и мяса,
+## по телу веером брызги в сторону полёта пули, вниз тянется потёк. Пуля в корпус или
+## голову часто выходит насквозь — со спины рана больше, с вырванным мясом.
+## Каждые несколько ран на части тела пропитывают кровью ещё кусок одежды, а сильно
+## изрешечённая часть тела разворочена: рёбра наружу, кость из руки или ноги.
 func _add_wound(zone: String, point: Vector3, dir: Vector3) -> void:
-	if _wounds >= MAX_WOUNDS or not parts.has(zone):
+	if not parts.has(zone):
+		return
+	var part: Node3D = parts[zone]
+	_part_wounds[zone] = int(_part_wounds.get(zone, 0)) + 1
+	if _part_wounds[zone] % SOAK_EVERY == 0:
+		_soak(part)
+	_add_gore_stage(zone)
+	if _wounds >= MAX_WOUNDS:
 		return
 	_wounds += 1
-	var part: Node3D = parts[zone]
 	var local := part.to_local(point)
-	Kit.add(part, Kit.sphere(0.035), Gore.blood_material(), local)
-	var out: Vector3 = (local - Vector3(ZONES[zone]["center"])).normalized()
-	if out.length() < 0.5:
-		out = part.global_transform.basis.inverse() * -dir
-	Gore.bleed(part, local, out, randf_range(2.5, 4.0))
+	var local_dir: Vector3 = (part.global_transform.basis.orthonormalized().inverse() * dir).normalized()
+	# Зона попадания — коробка, а тело круглое: рану кладём точно на видимую
+	# поверхность и крепим к тому суставу, который двигается (предплечье, голень),
+	# иначе при сгибе рана остаётся висеть в воздухе.
+	var hit := _surface_hit(part, local - local_dir * 0.6, local_dir)
+	if hit.is_empty():
+		# Пуля чиркнула по краю зоны мимо тела: рану кладём туда, где тело ближе всего.
+		var to_center: Vector3 = (ZONES[zone]["center"] as Vector3) - local
+		if to_center.length() > 0.01:
+			to_center = to_center.normalized()
+			hit = _surface_hit(part, local - to_center * 0.6, to_center)
+	if hit.is_empty():
+		return
+	var holder: Node3D = hit["holder"]
+	var at: Vector3 = hit["pos"]
+	var out: Vector3 = hit["normal"]
+	var curve: float = hit["radius"]
+	var dir_h: Vector3 = (holder.global_transform.basis.orthonormalized().inverse() * dir).normalized()
+	var big := 1.6 if zone == "torso" else (1.3 if zone == "head" else 1.1)
+	_wound_mesh(holder, at, out, dir_h, big, false, curve)
+	if randf() < 0.6:
+		# Потёк вниз от раны, прижат к телу.
+		var down: Vector3 = holder.global_transform.basis.orthonormalized().inverse() * Vector3.DOWN
+		var slide := down - out * down.dot(out)
+		if slide.length() > 0.2:
+			slide = slide.normalized()
+			var length := randf_range(0.08, 0.16)
+			var reach := length * 0.5
+			var run := Kit.add(holder, Kit.capsule(0.01, length), Gore.blood_material(), at + slide * reach - out * (reach * reach / (2.0 * curve) - 0.004))
+			run.basis = Basis(slide.cross(out).normalized(), slide, out)
+			run.scale = Vector3(1, 0.2, 0.35)
+			run.create_tween().tween_property(run, "scale:y", 1.0, randf_range(1.5, 3.0))
+	if (zone == "torso" or zone == "head") and randf() < 0.65:
+		# Выходное отверстие на другой стороне: больше и рванее.
+		var back := _surface_hit(part, local + local_dir * 0.8, -local_dir)
+		if not back.is_empty() and back["holder"] == holder:
+			_wound_mesh(holder, back["pos"], back["normal"], dir_h, big * 1.5, true, back["radius"])
+	if _wounds <= 12 or randf() < 0.3:
+		Gore.bleed(holder, at, out, randf_range(2.5, 4.0))
 
 
-## Скользящее попадание в голову: верх черепа слетает, мозги вываливаются и стекают.
-## Голова держится на честном слове: следующее попадание в неё убивает.
+## Где луч (в осях части тела) впервые входит в видимое тело: шары, капсулы, коробки
+## из которых собрана часть. Возвращает сустав-держатель, точку и нормаль в его осях
+## и радиус кривизны поверхности (чтобы прижать края раны к круглому телу).
+func _surface_hit(part: Node3D, from: Vector3, dir: Vector3) -> Dictionary:
+	var best := {}
+	var best_t := INF
+	var inv_part := part.global_transform.affine_inverse()
+	for mi in part.find_children("*", "MeshInstance3D", true, false):
+		if not _is_body_mesh(mi, part):
+			continue
+		var xf: Transform3D = inv_part * mi.global_transform
+		var inv := xf.affine_inverse()
+		var o: Vector3 = inv * from
+		var d: Vector3 = inv.basis * dir
+		var res := _ray_shape(mi.mesh, o, d)
+		if res.is_empty() or res["t"] >= best_t:
+			continue
+		best_t = res["t"]
+		var n: Vector3 = (xf.basis.inverse().transposed() * res["n"]).normalized()
+		var holder: Node3D = mi.get_parent()
+		var hx: Transform3D = inv_part * holder.global_transform
+		var hp: Vector3 = hx.affine_inverse() * (from + dir * best_t)
+		var hn: Vector3 = (hx.basis.inverse().transposed() * n).normalized()
+		var sc := xf.basis.get_scale()
+		best = {"holder": holder, "pos": hp, "normal": hn, "radius": maxf(0.04, res["r"] * minf(sc.x, minf(sc.y, sc.z)))}
+	return best
+
+
+func _is_body_mesh(mi: Node, part: Node3D) -> bool:
+	var m: Mesh = mi.mesh
+	if not (m is SphereMesh or m is CapsuleMesh or m is BoxMesh):
+		return false
+	var n := mi.get_parent()
+	while n != null and n != part:
+		if n.has_meta("wound"):
+			return false
+		n = n.get_parent()
+	return n == part
+
+
+## Пересечение луча o + d·t с фигурой меша в его собственных осях.
+## Возвращает t, нормаль n и радиус кривизны r, или пусто.
+static func _ray_shape(m: Mesh, o: Vector3, d: Vector3) -> Dictionary:
+	if m is SphereMesh:
+		var t := _ray_sphere(o, d, Vector3.ZERO, m.radius)
+		return {} if t < 0.0 else {"t": t, "n": (o + d * t).normalized(), "r": m.radius}
+	if m is CapsuleMesh:
+		var r: float = m.radius
+		var h: float = maxf(m.height * 0.5 - r, 0.0)
+		var best := -1.0
+		# Боковая стенка: бесконечный цилиндр вдоль Y, только между полусферами.
+		var a := d.x * d.x + d.z * d.z
+		if a > 1e-9:
+			var b := o.x * d.x + o.z * d.z
+			var c := o.x * o.x + o.z * o.z - r * r
+			var disc := b * b - a * c
+			if disc >= 0.0:
+				var t := (-b - sqrt(disc)) / a
+				if t > 0.0 and absf(o.y + d.y * t) <= h:
+					best = t
+		for cy in [h, -h]:
+			var t := _ray_sphere(o, d, Vector3(0, cy, 0), r)
+			if t > 0.0 and (best < 0.0 or t < best):
+				best = t
+		if best < 0.0:
+			return {}
+		var p := o + d * best
+		return {"t": best, "n": (p - Vector3(0, clampf(p.y, -h, h), 0)).normalized(), "r": r}
+	if m is BoxMesh:
+		var half: Vector3 = m.size * 0.5
+		var t0 := -INF
+		var t1 := INF
+		var axis := 0
+		for k in 3:
+			if absf(d[k]) < 1e-9:
+				if absf(o[k]) > half[k]:
+					return {}
+				continue
+			var ta := (-half[k] - o[k]) / d[k]
+			var tb := (half[k] - o[k]) / d[k]
+			if ta > tb:
+				var tmp := ta
+				ta = tb
+				tb = tmp
+			if ta > t0:
+				t0 = ta
+				axis = k
+			t1 = minf(t1, tb)
+		if t0 > t1 or t0 <= 0.0:
+			return {}
+		var n := Vector3.ZERO
+		n[axis] = -signf(d[axis])
+		return {"t": t0, "n": n, "r": 1.0}
+	return {}
+
+
+static func _ray_sphere(o: Vector3, d: Vector3, c: Vector3, r: float) -> float:
+	var oc := o - c
+	var a := d.dot(d)
+	var b := oc.dot(d)
+	var cc := oc.dot(oc) - r * r
+	var disc := b * b - a * cc
+	if disc < 0.0:
+		return -1.0
+	var t := (-b - sqrt(disc)) / a
+	return t if t > 0.0 else -1.0
+
+
+## Сама рана в осях части тела: at — точка на поверхности, out — наружу, along — полёт пули.
+func _wound_mesh(part: Node3D, at: Vector3, out: Vector3, along: Vector3, size: float, exit: bool, curve := 0.15) -> void:
+	var w := Node3D.new()
+	w.name = "Wound"
+	w.set_meta("wound", true)
+	part.add_child(w)
+	w.position = at
+	w.basis = Gore.basis_from_up(out).rotated(out, randf_range(0.0, TAU))
+	# Дыра: чёрная глубина, вокруг тёмное мясо.
+	Kit.add(w, Kit.sphere(0.02 * size), Gore.hole_material(), Vector3(0, 0.006, 0), Vector3.ZERO, Vector3(1.0, 0.35, randf_range(1.0, 1.5)))
+	Kit.add(w, Kit.sphere(0.032 * size), Gore.dark_blood_material(), Vector3.ZERO, Vector3.ZERO, Vector3(1.2, 0.3, 1.0))
+	# Рваный край: клочья разного размера и формы.
+	var shreds := randi_range(5, 8) + (3 if exit else 0)
+	for i in shreds:
+		var a := TAU * i / shreds + randf_range(-0.3, 0.3)
+		var r := randf_range(0.024, 0.045) * size
+		var mat: Material = [Gore.blood_material(), Gore.dark_blood_material(), Gore.meat_material()].pick_random()
+		var shred := Kit.add(w, Kit.sphere(randf_range(0.01, 0.022) * size), mat, Vector3(cos(a) * r, randf_range(0.0, 0.006) - _sag(r, curve), sin(a) * r), Vector3(0, randf_range(0, TAU), 0), Vector3(randf_range(0.6, 1.8), 0.35, randf_range(0.5, 1.4)))
+		shred.rotation.y = -a
+	# Мясо торчит наружу (из выходной раны — больше).
+	for i in randi_range(1, 2) + (3 if exit else 0):
+		var a := randf_range(0.0, TAU)
+		var r := randf_range(0.0, 0.03) * size
+		Kit.add(w, Kit.box(Vector3(randf_range(0.012, 0.03), randf_range(0.01, 0.03), randf_range(0.012, 0.03)) * size), Gore.meat_material(), Vector3(cos(a) * r, randf_range(0.004, 0.014) * size - _sag(r, curve), sin(a) * r), Vector3(randf_range(-0.8, 0.8), randf_range(0, TAU), randf_range(-0.8, 0.8)))
+	# Брызги на коже рядом с раной в сторону полёта пули. Лежат плоско и прижаты
+	# к изгибу тела: далеко от раны не уходят, чтобы не торчать в воздухе.
+	var t: Vector3 = w.basis.inverse() * along
+	t.y = 0.0
+	var tangent := t.normalized() if t.length() > 0.05 else Vector3(1, 0, 0)
+	for i in randi_range(2, 4):
+		var d := tangent.rotated(Vector3.UP, randf_range(-0.7, 0.7)) if not exit else Vector3(1, 0, 0).rotated(Vector3.UP, randf_range(0, TAU))
+		var dist := minf(randf_range(0.045, 0.08) * size, curve * 0.6)
+		var drop := Kit.add(w, Kit.sphere(randf_range(0.006, 0.011) * size), Gore.blood_material(), d * dist + Vector3(0, 0.001 - _sag(dist, curve), 0), Vector3.ZERO, Vector3(1.0, 0.2, randf_range(1.4, 2.2)))
+		drop.rotation.y = atan2(d.x, d.z)
+	w.scale = Vector3.ONE * 0.4
+	w.create_tween().tween_property(w, "scale", Vector3.ONE, 0.12)
+
+
+## На сколько опустить деталь, отстоящую от центра раны на r, чтобы она легла на круглое тело.
+static func _sag(r: float, curve: float) -> float:
+	return r * r / (2.0 * curve)
+
+
+## Сильно изрешечённая часть тела разворочена. Ступени по оставшейся прочности.
+func _add_gore_stage(zone: String) -> void:
+	if not zone_hp.has(zone) or not parts.has(zone):
+		return
+	var frac: float = zone_hp[zone] / float(ZONES[zone]["hp"])
+	var stage := 0
+	if frac < 0.55:
+		stage = 1
+	if frac < 0.25:
+		stage = 2
+	var had: int = _gore_stage.get(zone, 0)
+	if stage <= had:
+		return
+	_gore_stage[zone] = stage
+	var part: Node3D = parts[zone]
+	match zone:
+		"torso":
+			if stage >= 1 and had < 1:
+				# Грудь разворочена: тёмная яма, в ней рёбра.
+				var side: float = [-1.0, 1.0].pick_random()
+				var at := Vector3(0.08 * side, 0.36, -0.14)
+				Kit.add(part, Kit.sphere(0.09), Gore.dark_blood_material(), at, Vector3.ZERO, Vector3(1.0, 1.1, 0.35))
+				Kit.add(part, Kit.sphere(0.06), Gore.hole_material(), at + Vector3(0, 0, -0.012), Vector3.ZERO, Vector3(1.0, 1.0, 0.3))
+				for i in 3:
+					Kit.add(part, Kit.capsule(0.012, 0.13), Gore.bone_material(), at + Vector3(0, 0.05 - i * 0.045, -0.025), Vector3(0, 0, PI / 2 + randf_range(-0.2, 0.2)))
+				for i in 4:
+					Kit.add(part, Kit.box(Vector3(0.03, 0.025, 0.03)), Gore.meat_material(), at + Vector3(randf_range(-0.07, 0.07), randf_range(-0.07, 0.07), -0.03), Vector3(randf(), randf(), randf()))
+			if stage >= 2:
+				# Живот вспорот: кишки свисают.
+				Kit.add(part, Kit.sphere(0.08), Gore.hole_material(), Vector3(-0.02, 0.12, -0.13), Vector3.ZERO, Vector3(1.3, 0.9, 0.3))
+				for i in 4:
+					var gut := Kit.add(part, Kit.capsule(0.026, randf_range(0.18, 0.34)), Gore.meat_material(), Vector3(-0.06 + i * 0.035, 0.03 - i * 0.02, -0.16), Vector3(randf_range(-0.4, 0.4), 0, randf_range(-0.5, 0.5)))
+					gut.scale = Vector3(1, 0.2, 1)
+					gut.create_tween().tween_property(gut, "scale:y", 1.0, randf_range(0.6, 1.4))
+		"arm_l", "arm_r", "leg_l", "leg_r":
+			# Кость перебита и торчит из мяса.
+			var holder: Node3D = part
+			var y := randf_range(-0.2, -0.35) if zone.begins_with("arm") else randf_range(-0.15, -0.35)
+			if zone.begins_with("leg") and _knees.has(zone) and stage >= 2:
+				holder = _knees[zone]
+				y = randf_range(-0.1, -0.25)
+			var at := Vector3(0, y, -0.06)
+			Kit.add(holder, Kit.sphere(0.05), Gore.dark_blood_material(), at + Vector3(0, 0, 0.01), Vector3.ZERO, Vector3(1.2, 1.4, 0.6))
+			Kit.add(holder, Kit.capsule(0.017, 0.13), Gore.bone_material(), at + Vector3(0.01, 0.02, -0.03), Vector3(randf_range(0.6, 1.2), 0, randf_range(-0.6, 0.6)))
+			for i in 3:
+				Kit.add(holder, Kit.box(Vector3(0.025, 0.02, 0.025)), Gore.meat_material(), at + Vector3(randf_range(-0.03, 0.03), randf_range(-0.04, 0.04), -0.025), Vector3(randf(), randf(), randf()))
+		"head":
+			if stage >= 1 and had < 1:
+				# Щека разорвана: дыра в лице, видны зубы.
+				var x: float = [-0.06, 0.06].pick_random()
+				Kit.add(part, Kit.sphere(0.045), Gore.hole_material(), Vector3(x, 0.09, -0.09), Vector3.ZERO, Vector3(0.8, 1.0, 0.6))
+				Kit.add(part, Kit.sphere(0.055), Gore.dark_blood_material(), Vector3(x, 0.09, -0.08), Vector3.ZERO, Vector3(0.9, 1.1, 0.5))
+				for i in 4:
+					Kit.add(part, Kit.box(Vector3(0.012, 0.02, 0.012)), Gore.bone_material(), Vector3(x * 0.9, 0.075 + (i % 2) * 0.03, -0.11 + i * 0.008))
+
+
+## Одна из деталей части тела (рукав, штанина, кусок рубашки) пропитывается кровью.
+func _soak(part: Node3D) -> void:
+	var meshes: Array = []
+	for n in part.find_children("*", "MeshInstance3D", true, false):
+		var m := n as MeshInstance3D
+		if m.material_override != Gore.dark_blood_material() and m.material_override != Gore.blood_material() and m.name != "Cap":
+			meshes.append(m)
+	if meshes.is_empty():
+		return
+	var pick: MeshInstance3D = meshes.pick_random()
+	pick.material_override = Gore.dark_blood_material() if randf() < 0.7 else Gore.blood_material()
+
+
+## Скользящее попадание в голову или голова уже разбита пулями: верх черепа слетает,
+## мозги вываливаются и стекают. Голова держится, но вдвое слабее.
 func _open_skull(point: Vector3, dir: Vector3) -> void:
 	skull_open = true
-	zone_hp["head"] = minf(zone_hp["head"], 1.0)
+	zone_hp["head"] = maxf(1.0, minf(zone_hp["head"], float(ZONES["head"]["hp"]) * 0.5))
 	var head: Node3D = parts["head"]
 	var cap: Node3D = head.get_node_or_null("Cap")
 	var top := Vector3(0, 0.2, -0.01)
@@ -751,18 +1206,87 @@ func _open_skull(point: Vector3, dir: Vector3) -> void:
 	Gore.brains(head, top)
 	Gore.burst(get_parent(), point, dir + Vector3.UP, 20)
 	Sfx.play_at(get_parent(), "crunch", point, -2.0, 1.25)
-	Sfx.groan(self, "pain", 0.0)
+	_say("shriek", 0.0)
 	speed_jitter *= 0.8
 	_head_tilt = 0.5 * signf(_head_tilt if _head_tilt != 0.0 else 1.0)
+
+
+## Звук попадания зависит от зоны: голова — стук черепа, руки и ноги — то мясо,
+## то кость, корпус — мясо, иногда с чавканьем. Сверху иногда шлёпают брызги.
+## Каждый раз случайный вариант и высота, так что очередь не звучит как одна пуля.
+func _hit_sound(zone: String, point: Vector3) -> void:
+	var w := get_parent()
+	var pitch := randf_range(0.82, 1.18)
+	match zone:
+		"head":
+			Sfx.play_at(w, "hit_skull", point, -4.0, pitch)
+		"torso":
+			Sfx.play_at(w, "hit_flesh", point, -5.0, pitch * 0.92)
+			if randf() < 0.35:
+				Sfx.play_at(w, "squelch", point, -10.0, randf_range(0.85, 1.2))
+		_:
+			Sfx.play_at(w, "hit_bone" if randf() < 0.4 else "hit_flesh", point, -6.0, pitch * 1.08)
+	if randf() < 0.45:
+		Sfx.play_at(w, "spatter", point + Vector3.DOWN, -13.0, randf_range(0.9, 1.15))
+
+
+## Предплечье с кистью отрывается: улетает куском, из локтя торчит раздробленная
+## кость в клочьях мяса, хлещет кровь. Рука становится короче, попасть в неё труднее.
+func _tear_forearm(zone: String, dir: Vector3) -> void:
+	var arm: Node3D = parts.get(zone)
+	if arm == null:
+		return
+	var elbow: Node3D = arm.get_node_or_null("Elbow")
+	if elbow == null:
+		return
+	var at := elbow.global_position
+	Gore.detach(get_parent(), elbow, dir * 3.5 + _knock + Vector3.UP * 2.0)
+	arm.remove_child(elbow)
+	elbow.queue_free()
+	# Раны и потёки, что были на предплечье, уходят вместе с ним.
+	for child in arm.get_children():
+		if child is Node3D and not (child is Area3D) and (child as Node3D).position.y < ELBOW_Y + 0.02:
+			child.queue_free()
+	_ragged_stump(arm, Vector3(0, ELBOW_Y, 0), Vector3.DOWN, 0.8)
+	Gore.burst(get_parent(), at, dir, 22)
+	Gore.chunks(get_parent(), at, dir, 8)
+	Sfx.play_at(get_parent(), "tear", at, -1.0, randf_range(0.9, 1.15))
+	Sfx.play_at(get_parent(), "hit_bone", at, -5.0, randf_range(0.8, 1.0))
+	_say("shriek", 0.0)
+	_arm_len[zone] = _arm_len[zone] * 0.55
+	# Зона попадания — только плечо.
+	for area in arm.get_children():
+		if area is Area3D:
+			area.position = Vector3(0, ELBOW_Y / 2.0, 0)
+			var col: CollisionShape3D = area.get_child(0)
+			(col.shape as BoxShape3D).size = Vector3(0.15, absf(ELBOW_Y) + 0.04, 0.15)
+	arm.set_meta("hit_size", Vector3(0.15, absf(ELBOW_Y) + 0.04, 0.15))
+	arm.set_meta("hit_center", Vector3(0, ELBOW_Y / 2.0, 0))
+
+
+## Рваный обрубок: раздробленная кость, клочья мяса и кожи вокруг, бьёт кровь.
+func _ragged_stump(holder: Node3D, at: Vector3, out: Vector3, size := 1.0) -> void:
+	Kit.add(holder, Kit.sphere(0.055 * size), Gore.dark_blood_material(), at, Vector3.ZERO, Vector3(1.1, 0.6, 1.1))
+	Kit.add(holder, Kit.capsule(0.017 * size, 0.11 * size), Gore.bone_material(), at + out * 0.05 * size, Vector3(randf_range(-0.3, 0.3), 0, randf_range(-0.3, 0.3)))
+	for i in randi_range(5, 8):
+		var a := randf_range(0, TAU)
+		var r := randf_range(0.03, 0.06) * size
+		var mat: Material = [Gore.meat_material(), Gore.blood_material(), Gore.dark_blood_material(), _skin].pick_random()
+		Kit.add(holder, Kit.box(Vector3(randf_range(0.015, 0.035), randf_range(0.03, 0.07), randf_range(0.015, 0.035)) * size), mat, at + Vector3(cos(a) * r, 0, sin(a) * r) + out * randf_range(0.0, 0.04) * size, Vector3(randf_range(-0.7, 0.7), a, randf_range(-0.7, 0.7)))
+	Gore.bleed(holder, at, out, 5.0, 1.6)
 
 
 func _sever(zone: String, point: Vector3, dir: Vector3) -> void:
 	var part: Node3D = parts[zone]
 	Gore.detach(get_parent(), part, dir * 3.0 + _knock + Vector3.UP * 2.0)
 	Gore.burst(get_parent(), part.global_position, dir, 25)
+	Gore.chunks(get_parent(), part.global_position, dir, 10)
 	Sfx.play_at(get_parent(), "crunch", point, 0.0)
-	Sfx.groan(self, "pain", 0.0)
+	Sfx.play_at(get_parent(), "tear", point, -3.0, randf_range(0.8, 1.05))
+	_say("shriek", 0.0)
 	_remove_part(zone)
+	if dead:
+		return
 	if zone.begins_with("leg"):
 		_start_crawl()
 	if not (parts.has("arm_l") or parts.has("arm_r") or parts.has("leg_l") or parts.has("leg_r")):
@@ -779,7 +1303,7 @@ func _die_headshot(point: Vector3, dir: Vector3) -> void:
 	Sfx.play_at(get_parent(), "crunch", point, 3.0, 0.8)
 	died.emit("head")
 	Gore.hit_stop(get_tree(), 0.06)
-	_collapse(dir * 1.5 + _knock * 1.2)
+	_become_corpse(dir, "head")
 
 
 func _die_body(point: Vector3, dir: Vector3) -> void:
@@ -788,7 +1312,7 @@ func _die_body(point: Vector3, dir: Vector3) -> void:
 	Sfx.play_at(get_parent(), "crunch", point, 0.0, 0.9)
 	died.emit("torso")
 	Gore.hit_stop(get_tree(), 0.04)
-	_collapse(dir * 3.0 + _knock * 1.5)
+	_become_corpse(dir, "torso")
 
 
 ## Тело разваливается: каждая часть отлетает отдельным физическим куском.
@@ -801,6 +1325,7 @@ func _collapse(impulse: Vector3) -> void:
 		part.get_parent().remove_child(part)
 		part.queue_free()
 	parts.clear()
+	_corpses.erase(self)
 	queue_free()
 
 
@@ -813,6 +1338,10 @@ func _start_crawl() -> void:
 	var has_r := parts.has("leg_r")
 	crawl_style = "arms" if not (has_l or has_r) else ("left" if has_l else "right")
 	crawling = true
+	_kneel = 0.0
+	_sink = 0.0
+	for z in _knees:
+		_knees[z].rotation.x = 0.0
 	var tilt := -1.5 if crawl_style == "arms" else -1.3
 	var tween := create_tween().set_parallel()
 	tween.tween_property(body, "rotation:x", tilt, 0.35).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
@@ -828,11 +1357,13 @@ func _remove_part(zone: String) -> void:
 	var at := part.position
 	parts.erase(zone)
 	zone_hp.erase(zone)
+	_knees.erase(zone)
 	holder.remove_child(part)
 	part.queue_free()
-	# Красный обрубок, из которого ещё какое-то время хлещет кровь.
-	var stump := Kit.add(holder, Kit.sphere(0.09), Gore.blood_material(), at, Vector3.ZERO, Vector3(1, 0.7, 1))
+	# Рваный обрубок: кость, клочья мяса и кожи, из него ещё какое-то время хлещет кровь.
+	var stump := Kit.add(holder, Kit.sphere(0.08), Gore.blood_material(), at, Vector3.ZERO, Vector3(1, 0.6, 1))
 	var out := Vector3.UP if zone == "head" else (Vector3.DOWN if zone.begins_with("leg") else Vector3(signf(at.x), 0, 0))
+	_ragged_stump(holder, at, out, 1.4)
 	Gore.bleed(holder, at, out, 5.0, 2.0)
 	stump.name = "Stump_" + zone
 	_stumps += 1
@@ -854,3 +1385,217 @@ func _nearest_player():
 			best_dist = d
 			best = p
 	return best
+
+
+# --- Смерть и трупы -----------------------------------------------------------
+
+## Тело не разлетается на куски, а падает целиком и остаётся лежать. Как падает:
+## от выстрела в голову чаще валится как подкошенный по направлению пули, иногда
+## сначала подгибаются колени; убитый в корпус оседает на колени, качается и падает
+## лицом вперёд; сбитый дробью продолжает лететь; ползущий просто обмякает.
+func _become_corpse(dir: Vector3, cause: String) -> void:
+	dead = true
+	# Без головы кричать нечем; убитый в корпус хрипит перед смертью.
+	if parts.has("head"):
+		_say("death", -3.0)
+	remove_from_group("zombies")
+	add_to_group("corpses")
+	# Живые и игроки проходят сквозь труп (и спотыкаются о него), пол держит.
+	collision_layer = 0
+	collision_mask = 1
+	_capsule.radius = 0.25
+	_capsule.height = 0.5
+	_capsule_node.position.y = 0.25
+	_arm_state.clear()
+	_shoulder_prev.clear()
+	_flail = 1.0
+	if zone_hp.has("torso"):
+		zone_hp["torso"] = CORPSE_HP
+	_corpses.append(self)
+	while _corpses.size() > MAX_CORPSES:
+		var old = _corpses.pop_front()
+		if is_instance_valid(old):
+			old.queue_free()
+	var torso: Node3D = parts.get("torso")
+	if torso:
+		_torso_rest = torso.rotation
+	_landed = false
+	if crawling:
+		death_stage = "slump"
+		_death_timer = 0.0
+		return
+	if knocked_down > 0.0 or _knock.length() >= KNOCKDOWN_SPEED * 0.8:
+		# Уже летит или падает: просто не встанет.
+		if _fall < 0.05:
+			_start_fall()
+		death_stage = "topple"
+		return
+	var buckle_chance := 0.4 if cause == "head" else 0.75
+	if randf() < buckle_chance:
+		death_stage = "buckle"
+		_death_timer = randf_range(0.35, 0.75)
+	else:
+		_topple_along(dir, 1.2)
+
+
+func _topple_along(dir: Vector3, speed: float) -> void:
+	var d: Vector3 = global_transform.basis.orthonormalized().inverse() * Vector3(dir.x, 0.0, dir.z)
+	d.y = 0.0
+	if d.length() < 0.01:
+		d = Vector3.BACK
+	d = d.normalized()
+	_fall_dir = Vector2(d.x, d.z)
+	_fall_pivot = Vector3.ZERO
+	_fall_vel = maxf(_fall_vel, speed)
+	death_stage = "topple"
+
+
+func _corpse_process(delta: float) -> void:
+	if not is_on_floor():
+		velocity.y -= GRAVITY * delta
+	velocity.x = _knock.x
+	velocity.z = _knock.z
+	# Лежачее тело быстро тормозит о пол.
+	_knock *= exp(-delta * (4.5 if death_stage != "lying" else 9.0))
+	move_and_slide()
+	_update_jerk(delta)
+	_animate_dead(delta)
+
+
+func _animate_dead(delta: float) -> void:
+	var torso: Node3D = parts.get("torso")
+	match death_stage:
+		"buckle":
+			_death_timer -= delta
+			_sink = move_toward(_sink, KNEEL_SINK, delta * 2.4)
+			var bend := _sink / KNEEL_SINK
+			for zone in _knees:
+				parts[zone].rotation.x = move_toward(parts[zone].rotation.x, 0.0, delta * 3.0)
+				_knees[zone].rotation.x = -1.5 * bend
+			# Обмякает: корпус клонится вперёд и покачивается, голова падает.
+			_torso_rest.x = lerpf(_torso_rest.x, -0.55, delta * 3.0)
+			_torso_rest.z = sin(_phase * 2.0) * 0.12
+			_phase += delta * 3.0
+			body.rotation = Vector3.ZERO
+			body.position = Vector3(0, -_sink, 0)
+			if _death_timer <= 0.0:
+				# Валится вперёд, немного вбок, вокруг коленей.
+				_fall_dir = Vector2(randf_range(-0.5, 0.5), -1.0).normalized()
+				_fall_pivot = KNEE_POS
+				_fall = 0.0
+				_fall_vel = 0.4
+				death_stage = "topple"
+		"slump":
+			# Ползущий просто обмякает и ложится плашмя.
+			_sink = move_toward(_sink, 0.0, delta * 2.0)
+			for zone in _knees:
+				_knees[zone].rotation.x = move_toward(_knees[zone].rotation.x, -0.2, delta * 3.0)
+			for zone in ["leg_l", "leg_r"]:
+				if parts.has(zone):
+					parts[zone].rotation.x = move_toward(parts[zone].rotation.x, 0.0, delta * 3.0)
+			body.rotation.x = move_toward(body.rotation.x, -1.5, delta * 4.0)
+			body.rotation.z = 0.0
+			body.position.y = move_toward(body.position.y, 0.14, delta * 2.0)
+			_torso_rest = _torso_rest.move_toward(Vector3(0.05, 0, 0), delta * 3.0)
+			if not _landed and body.rotation.x <= -1.45:
+				_land()
+		"topple", "lying":
+			_animate_corpse_fall(delta)
+	if torso:
+		torso.rotation = _torso_rest + _jerk
+	if parts.has("head"):
+		parts["head"].rotation.x = _head_rest().x + _hjerk.x
+		parts["head"].rotation.z = _head_rest().z + _hjerk.y
+	_animate_flail(delta)
+	if parts.has("torso"):
+		corpse_center = (parts["torso"] as Node3D).global_position
+
+
+func _head_rest() -> Vector3:
+	if death_stage == "buckle":
+		return Vector3(-0.5, 0, _head_tilt)
+	return Vector3(0.1, 0, _head_tilt * 1.5)
+
+
+## Тело валится вокруг ступней (или коленей, если уже на них осело): гравитация
+## опрокидывает, у пола удар, отскок, и дальше лежит. Ноги разгибаются, корпус
+## выпрямляется, пока летит.
+const CORPSE_GROUND := 1.48
+
+func _animate_corpse_fall(delta: float) -> void:
+	var com := 0.95 if _fall_pivot == Vector3.ZERO else 0.55
+	if death_stage == "topple":
+		_fall_vel += 9.8 / com * sin(maxf(_fall, 0.08)) * delta
+		_fall += _fall_vel * delta
+		if _fall >= CORPSE_GROUND:
+			_fall = CORPSE_GROUND
+			if _fall_vel > 1.2:
+				_fall_vel = -_fall_vel * 0.25
+				_hjerk_v.x += 6.0
+				_jerk_v.x += _fall_dir.y * 3.0
+				if not _landed:
+					_land()
+			else:
+				_fall_vel = 0.0
+				death_stage = "lying"
+				if not _landed:
+					_land()
+	_torso_rest = _torso_rest.move_toward(Vector3.ZERO, delta * 2.0)
+	for zone in _knees:
+		var target: float = -0.15 if _fall > 1.2 else _knees[zone].rotation.x
+		_knees[zone].rotation.x = move_toward(_knees[zone].rotation.x, target, delta * 3.0)
+		parts[zone].rotation.x = move_toward(parts[zone].rotation.x, 0.0, delta * 2.0)
+	body.rotation = Vector3(_fall * _fall_dir.y, 0.0, -_fall * _fall_dir.x)
+	var p := _fall_pivot
+	body.position = Vector3(0, -_sink, 0) + p - body.basis * p
+	body.position.y += 0.12 * clampf(_fall / CORPSE_GROUND, 0.0, 1.0)
+
+
+## Тело ударилось о пол: глухой шлепок и лужа крови, которая растекается из-под него.
+func _land() -> void:
+	_landed = true
+	Sfx.play_at(get_parent(), "splat", global_position + Vector3.UP * 0.2, -4.0, 0.45)
+	var at: Vector3 = global_position
+	if parts.has("torso"):
+		at = (parts["torso"] as Node3D).global_position
+	corpse_center = at
+	var pool := Gore.floor_stain(get_parent(), at, "pool", randf_range(0.2, 0.28))
+	if pool:
+		# Лужа растекается, но не дальше края пола или ступеньки.
+		var grown := pool.scale
+		for k in [randf_range(2.8, 3.6), 2.2, 1.5]:
+			if Gore.fits(get_parent(), pool.global_transform.orthonormalized(), pool.scale.x * k, pool.scale.z * k):
+				grown = pool.scale * k
+				break
+		grown.y = 1.0
+		pool.create_tween().tween_property(pool, "scale", grown, randf_range(4.0, 7.0)).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+
+
+## Попадание в труп: тело дёргается, брызжет кровь, его немного сдвигает.
+## Можно отстрелить голову или конечность, а изрешечённый труп разваливается на куски.
+func hit_corpse(zone: String, damage: float, point: Vector3, dir: Vector3, force := 1.0) -> void:
+	if not dead or not zone_hp.has(zone):
+		return
+	Gore.splash(get_parent(), point, dir, 16)
+	Gore.chunks(get_parent(), point, dir, randi_range(1, 3))
+	_jolt(zone, point, dir, force * 1.4)
+	var flat := Vector3(dir.x, 0.0, dir.z).normalized()
+	_knock = (_knock + flat * force * 0.2).limit_length(4.0)
+	zone_hp[zone] -= damage * float(ZONES[zone]["mult"])
+	if zone_hp[zone] > 0.0:
+		_add_wound(zone, point, dir)
+		# Пуля в труп: глуше и мокрее, чем в живого.
+		Sfx.play_at(get_parent(), ["hit_flesh", "squelch"].pick_random(), point, -9.0, randf_range(0.7, 0.95))
+		return
+	match zone:
+		"torso":
+			Gore.burst(get_parent(), point, dir, 30)
+			Sfx.play_at(get_parent(), "crunch", point, -2.0, 0.9)
+			_collapse(dir * 3.0 + _knock)
+		_:
+			var part: Node3D = parts[zone]
+			Gore.detach(get_parent(), part, dir * 3.0 + Vector3.UP * 2.0)
+			Gore.burst(get_parent(), part.global_position, dir, 20)
+			Sfx.play_at(get_parent(), "crunch", point, -2.0)
+			_remove_part(zone)
+

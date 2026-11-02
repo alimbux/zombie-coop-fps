@@ -352,7 +352,11 @@ func shoot() -> String:
 			continue
 		var zone: String = hit["collider"].get_meta("zone")
 		var zombie = hit["collider"].get_meta("zombie")
-		if not is_instance_valid(zombie) or zombie.dead:
+		if not is_instance_valid(zombie):
+			continue
+		if zombie.dead:
+			# Труп дёргается от пуль, его можно разорвать на куски.
+			zombie.hit_corpse(zone, stats["damage"], hit["position"], dir, stats["knockback"])
 			continue
 		var loud := not hit_zombies.has(zombie)
 		hit_zombies[zombie] = true
@@ -407,6 +411,9 @@ func share_ammo() -> int:
 func aim_zone() -> String:
 	var hit := _ray(-camera.global_transform.basis.z, 60.0)
 	if hit.is_empty() or not (hit["collider"] is Area3D):
+		return ""
+	var owner_zombie = hit["collider"].get_meta("zombie", null)
+	if is_instance_valid(owner_zombie) and owner_zombie.dead:
 		return ""
 	return str(hit["collider"].get_meta("zone", ""))
 

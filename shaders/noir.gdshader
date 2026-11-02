@@ -18,7 +18,8 @@ void fragment() {
 
 	// Насколько пиксель «красный»: только кровь в игре имеет такой цвет.
 	float redness = clamp((c.r - max(c.g, c.b)) * 3.0, 0.0, 1.0);
-	vec3 blood = vec3(max(c.r, 0.6), 0.0, 0.02);
+	// Тёмная запёкшаяся кровь и мясо в тени остаются тёмно-красными, яркая — яркой.
+	vec3 blood = vec3(max(c.r, 0.3), 0.0, 0.02);
 	vec3 col = mix(vec3(lum), blood, redness);
 
 	float n = rand(UV * 731.0 + vec2(TIME * 17.0 + seed_offset, TIME * 9.0)) - 0.5;
