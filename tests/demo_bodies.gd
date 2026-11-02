@@ -60,16 +60,24 @@ func _run() -> void:
 	if not a.crawling:
 		a._start_kneel()
 	await _f(40)
-	# B: в голову — падает целиком.
-	await _shoot(b, "head", Zombie.ZONES["head"]["center"])
-	await _f(50)
+	# B: в голову — голова разбивается, третья пуля валит.
+	for i in 6:
+		if b.dead:
+			break
+		await _shoot(b, "head", Zombie.ZONES["head"]["center"])
+		await _f(12)
+	await _f(40)
 	# C: очередь в корпус — подгибаются колени, валится лицом вперёд.
 	p.switch_to("smg")
 	await _f(20)
-	for i in 6:
+	for i in 30:
 		if c.dead:
 			break
-		await _shoot(c, "torso", Vector3(randf_range(-0.1, 0.1), 0.3, 0))
+		var zone: String = ["torso", "torso", "torso", "leg_l", "arm_r", "head"].pick_random()
+		if not c.parts.has(zone):
+			zone = "torso"
+		var at: Vector3 = Zombie.ZONES[zone]["center"] + Vector3(randf_range(-0.06, 0.06), randf_range(-0.1, 0.1), 0)
+		await _shoot(c, zone, at)
 		await _f(5)
 	await _f(70)
 	# Труп B дёргается от пуль.
@@ -81,9 +89,13 @@ func _run() -> void:
 			await _f(14)
 	# Остальные идут через трупы.
 	await _f(200)
-	# Ползущего A добить в голову.
-	if is_instance_valid(a) and not a.dead:
-		await _shoot(a, "head", Zombie.ZONES["head"]["center"])
+	# Ползущего A добить: пули по корпусу и голове.
+	p.switch_to("smg")
+	for i in 30:
+		if not is_instance_valid(a) or a.dead:
+			break
+		await _shoot(a, "torso" if i % 3 else "head", Vector3(0, 0.3, 0) if i % 3 else Zombie.ZONES["head"]["center"])
+		await _f(5)
 	await _f(90)
 	quit(0)
 
@@ -101,8 +113,7 @@ func _shoot(z, zone: String, local: Vector3) -> void:
 		return
 	await _aim(z.parts[zone].to_global(local))
 	p.fire_cooldown = 0.0
-	if p.mag[p.current] <= 0:
-		p.mag[p.current] = 12
+	p.mag[p.current] = 12
 	p.shoot()
 
 

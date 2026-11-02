@@ -123,10 +123,10 @@ func _stage_gallery(main: Node) -> void:
 				var c: Vector3 = z.parts["head"].to_global(Zombie.ZONES["head"]["center"])
 				z.take_hit("head", 30.0, c + Vector3(0.13, 0, 0), dir)
 			"leg_r", "leg_l":
-				z.take_hit(pair[1], 60.0, at + Vector3(0, 0.4, 0), dir)
+				z.take_hit(pair[1], 200.0, at + Vector3(0, 0.4, 0), dir)
 			"both":
-				z.take_hit("leg_l", 60.0, at + Vector3(0, 0.4, 0), dir)
-				z.take_hit("leg_r", 60.0, at + Vector3(0, 0.4, 0), dir)
+				z.take_hit("leg_l", 200.0, at + Vector3(0, 0.4, 0), dir)
+				z.take_hit("leg_r", 200.0, at + Vector3(0, 0.4, 0), dir)
 			"walk", "limp", "fast":
 				pass
 			_:
