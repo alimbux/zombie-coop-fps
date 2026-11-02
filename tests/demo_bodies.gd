@@ -79,13 +79,8 @@ func _run() -> void:
 		if is_instance_valid(b):
 			await _shoot_corpse(b)
 			await _f(14)
-	# Остальные идут через трупы и спотыкаются.
-	for t in 200:
-		await physics_frame
-		for z in zs.slice(3):
-			if is_instance_valid(z) and not z.dead and z.knocked_down <= 0.0 and not z._tripped.is_empty() and not z.has_meta("t"):
-				z.set_meta("t", true)
-				z.trip()
+	# Остальные идут через трупы.
+	await _f(200)
 	# Ползущего A добить в голову.
 	if is_instance_valid(a) and not a.dead:
 		await _shoot(a, "head", Zombie.ZONES["head"]["center"])
