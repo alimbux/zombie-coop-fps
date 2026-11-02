@@ -87,19 +87,23 @@ func _test_waves() -> void:
 
 	var z1 = _spawn(world, Vector3(4, 0.1, -6))
 	await _frames(2)
-	_check(z1.take_hit("head", 34.0, z1.parts["head"].to_global(Zombie.ZONES["head"]["center"]), Vector3.FORWARD), "попадание в голову убивает")
+	# Живучие, как в ролике: голова выдерживает два выстрела из пистолета, третий убивает.
+	var head_hits := 0
+	while not z1.dead and head_hits < 10:
+		z1.take_hit("head", 34.0, z1.parts["head"].to_global(Zombie.ZONES["head"]["center"]), Vector3.FORWARD)
+		head_hits += 1
+	_check(z1.dead and head_hits == 3, "голову пробивает третья пуля пистолета (было %d)" % head_hits)
 
 	var z2 = _spawn(world, Vector3(6, 0.1, -6))
 	await _frames(2)
-	z2.take_hit("leg_l", 34.0, z2.global_position + Vector3.UP * 0.3, Vector3.FORWARD)
-	z2.take_hit("leg_l", 34.0, z2.global_position + Vector3.UP * 0.3, Vector3.FORWARD)
+	z2.take_hit("leg_l", 200.0, z2.global_position + Vector3.UP * 0.3, Vector3.FORWARD)
 	_check(z2.crawling and not z2.dead and z2.crawl_style == "right", "без левой ноги ползёт с опорой на правую")
-	z2.take_hit("leg_r", 60.0, z2.global_position + Vector3.UP * 0.3, Vector3.FORWARD)
+	z2.take_hit("leg_r", 200.0, z2.global_position + Vector3.UP * 0.3, Vector3.FORWARD)
 	_check(z2.crawl_style == "arms" and not z2.dead, "без обеих ног ползёт на руках")
 
 	var zr = _spawn(world, Vector3(2, 0.1, -6))
 	await _frames(2)
-	zr.take_hit("leg_r", 60.0, zr.global_position + Vector3.UP * 0.3, Vector3.FORWARD)
+	zr.take_hit("leg_r", 200.0, zr.global_position + Vector3.UP * 0.3, Vector3.FORWARD)
 	_check(zr.crawl_style == "left", "без правой ноги ползёт с опорой на левую")
 	await _frames(30)
 	_check(not zr.dead and zr.body.rotation.x < -1.0, "ползущий лежит лицом вниз")
@@ -152,7 +156,9 @@ func _test_waves() -> void:
 	var edge := head_center + Vector3(0.13, 0, 0)
 	_check(zg.is_glancing(edge, Vector3.FORWARD) and not zg.is_glancing(head_center, Vector3.FORWARD), "край головы считается касательным, центр — нет")
 	_check(not zg.take_hit("head", 34.0, edge, Vector3.FORWARD) and zg.skull_open, "вскользь по голове: череп вскрыт, зомби жив")
-	_check(zg.take_hit("head", 22.0, head_center, Vector3.FORWARD), "второе попадание во вскрытую голову убивает")
+	_check(not zg.take_hit("head", 22.0, head_center, Vector3.FORWARD) and not zg.dead, "вскрытая голова держит ещё пулю автомата")
+	zg.take_hit("head", 22.0, head_center, Vector3.FORWARD)
+	_check(zg.dead, "вторая пуля во вскрытую голову убивает")
 
 	var z3 = _spawn(world, Vector3(8, 0.1, -6))
 	await _frames(2)
@@ -160,7 +166,8 @@ func _test_waves() -> void:
 	while not z3.dead and hits < 10:
 		z3.take_hit("torso", 34.0, z3.global_position + Vector3.UP * 1.0, Vector3.FORWARD)
 		hits += 1
-	_check(z3.dead and hits == 4, "торс убивает за 4 попадания (было %d)" % hits)
+	_check(z3.dead and hits == 8, "торс выдерживает 7 пуль пистолета, восьмая убивает (было %d)" % hits)
+	_check(z3._wounds >= 7 and z3._part_wounds.get("torso", 0) >= 7, "каждая пуля оставляет рану (%d)" % z3._wounds)
 	await _test_bodies(world)
 
 	var p1 = main.players[0]
@@ -186,8 +193,12 @@ func _test_waves() -> void:
 	z4.global_position.y += p1.camera.global_position.y - head_y
 	await _frames(1)
 	var zone: String = p1.shoot()
-	_check(zone == "head" and z4.dead, "выстрел из пистолета в голову (зона «%s»)" % zone)
-	_check(p1.mag["pistol"] == 11, "выстрел тратит патрон")
+	_check(zone == "head" and not z4.dead and p1.mag["pistol"] == 11, "выстрел в голову попал, зомби ещё жив, патрон потрачен")
+	for i in 2:
+		p1.fire_cooldown = 0.0
+		p1.shoot()
+	_check(z4.dead, "третий выстрел из пистолета в голову убивает")
+	p1.mag["pistol"] = 11
 
 	# Отдача: дробовик в упор толкает дальше, чем очередь из автомата той же длины по времени.
 	var dist := {}
@@ -235,8 +246,12 @@ func _test_waves() -> void:
 	var z5 = _spawn(world, p1.global_position + Vector3(0, 0, -1.2))
 	z5.set_physics_process(false)
 	await _frames(3)
-	p1.shoot()
-	_check(z5.dead and p1.mag["pistol"] == 11, "нож убивает вплотную и не тратит патроны")
+	var swings := 0
+	while not z5.dead and swings < 10:
+		p1.fire_cooldown = 0.0
+		p1.shoot()
+		swings += 1
+	_check(z5.dead and swings <= 3 and p1.mag["pistol"] == 11, "нож убивает вплотную за %d удара и не тратит патроны" % swings)
 
 	for c in get_nodes_in_group("corpses"):
 		c.free()
@@ -339,14 +354,18 @@ func _test_waves() -> void:
 	await _frames(int(Weapons.stat("pistol", "reload") * 0.3 * 60))
 	_check(p1._hand.position.is_equal_approx(hand_rest) and p1.mag["pistol"] == 12, "после перезарядки рука убрана, магазин полный")
 
-	# Конечности отрываются с одного выстрела пистолета, рука — с одной пули автомата.
+	# Конечности держатся крепко: ногу отрывают только три пули пистолета, руку — четыре пули автомата.
 	var zl = _spawn(world, Vector3(-6, 0.1, -12))
 	zl.set_physics_process(false)
 	await _frames(2)
+	for i in 2:
+		zl.take_hit("leg_l", Weapons.stat("pistol", "damage"), zl.global_position + Vector3.UP * 0.4, Vector3.FORWARD)
+	_check(zl.parts.has("leg_l"), "две пули пистолета ногу не отрывают")
 	zl.take_hit("leg_l", Weapons.stat("pistol", "damage"), zl.global_position + Vector3.UP * 0.4, Vector3.FORWARD)
-	_check(not zl.parts.has("leg_l") and zl.crawling, "пистолет отрывает ногу с одного выстрела")
-	zl.take_hit("arm_r", Weapons.stat("smg", "damage"), zl.parts["arm_r"].to_global(Vector3(0, -0.3, 0)), Vector3.FORWARD)
-	_check(not zl.parts.has("arm_r") and not zl.dead, "пуля автомата отрывает руку")
+	_check(not zl.parts.has("leg_l") and zl.crawling, "третья пуля отрывает ногу")
+	for i in 4:
+		zl.take_hit("arm_r", Weapons.stat("smg", "damage"), zl.parts["arm_r"].to_global(Vector3(0, -0.3, 0)), Vector3.FORWARD)
+	_check(not zl.parts.has("arm_r") and not zl.dead, "четыре пули автомата отрывают руку")
 	_check(Weapons.stat("shotgun", "spread") >= 0.15 and Weapons.stat("shotgun", "pellets") == 10, "у дробовика широкий разлёт")
 
 	p1.switch_to("pistol")
@@ -427,7 +446,7 @@ func _test_bodies(world: Node3D) -> void:
 	await _frames(120)
 	var crawled := Vector2(zk.global_position.x - kneel_at.x, zk.global_position.z - kneel_at.z).length()
 	_check(zk.parts["torso"].rotation.x < -0.8 and crawled > 0.3, "потом ползёт на четвереньках (наклон %.2f, прополз %.2f м)" % [zk.parts["torso"].rotation.x, crawled])
-	zk.take_hit("torso", 200.0, zk.parts["torso"].global_position, Vector3.FORWARD)
+	zk.take_hit("torso", 400.0, zk.parts["torso"].global_position, Vector3.FORWARD)
 	await _frames(60)
 	_check(is_instance_valid(zk) and zk.dead and zk._landed, "ползущий обмякает и остаётся лежать")
 
@@ -435,7 +454,7 @@ func _test_bodies(world: Node3D) -> void:
 	var jerk_before: float = zk._jerk_v.length()
 	zk.hit_corpse("torso", 16.0, zk.parts["torso"].global_position, Vector3.FORWARD, 1.0)
 	_check(zk._jerk_v.length() > jerk_before + 0.5 and is_instance_valid(zk), "труп дёргается от пули")
-	for i in 6:
+	for i in 12:
 		if is_instance_valid(zk) and not zk.is_queued_for_deletion():
 			zk.hit_corpse("torso", 16.0, zk.parts["torso"].global_position, Vector3.FORWARD, 1.0)
 	_check(not is_instance_valid(zk) or zk.is_queued_for_deletion(), "изрешечённый труп разваливается на куски")
@@ -443,7 +462,7 @@ func _test_bodies(world: Node3D) -> void:
 	# Идущий по трупу не падает сам по себе.
 	var zc = _spawn(world, Vector3(-12, 0.1, 8))
 	await _frames(2)
-	zc.take_hit("head", 200.0, zc.parts["head"].to_global(Zombie.ZONES["head"]["center"]), Vector3.FORWARD)
+	zc.take_hit("head", 400.0, zc.parts["head"].to_global(Zombie.ZONES["head"]["center"]), Vector3.FORWARD)
 	await _frames(150)
 	var zt = _spawn(world, zc.corpse_center + Vector3.UP * 0.1)
 	var fell := false

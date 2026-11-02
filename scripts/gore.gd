@@ -10,6 +10,8 @@ const DEBRIS_LAYER := 16
 
 static var _blood_mat: StandardMaterial3D
 static var _brain_mat: StandardMaterial3D
+static var _dark_mat: StandardMaterial3D
+static var _chunk_mesh: BoxMesh
 static var _layer := 0
 static var _drop_mesh: BoxMesh
 static var _stains: Array = []
@@ -22,6 +24,44 @@ static func blood_material() -> StandardMaterial3D:
 		_blood_mat.albedo_color = Color(0.9, 0.0, 0.03)
 		_blood_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	return _blood_mat
+
+
+## Тёмная запёкшаяся кровь: ей пропитывается одежда, из неё куски мяса.
+static func dark_blood_material() -> StandardMaterial3D:
+	if _dark_mat == null:
+		_dark_mat = StandardMaterial3D.new()
+		# Без освещения, как и яркая кровь, иначе в тени фильтр сделает её серой.
+		_dark_mat.albedo_color = Color(0.6, 0.0, 0.02)
+		_dark_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	return _dark_mat
+
+
+## Куски мяса, вылетающие из раны: тёмно-красные комки разного размера летят по пуле
+## и вбок, падают на пол.
+static func chunks(world: Node3D, point: Vector3, dir: Vector3, amount: int) -> void:
+	if _chunk_mesh == null:
+		_chunk_mesh = BoxMesh.new()
+		_chunk_mesh.size = Vector3.ONE * 0.045
+		_chunk_mesh.material = dark_blood_material()
+	var p := CPUParticles3D.new()
+	p.one_shot = true
+	p.amount = maxi(amount, 1)
+	p.lifetime = 1.1
+	p.explosiveness = 1.0
+	p.direction = (dir.normalized() + Vector3.UP * 0.4).normalized()
+	p.spread = 50.0
+	p.initial_velocity_min = 1.5
+	p.initial_velocity_max = 5.0
+	p.gravity = Vector3(0, -16, 0)
+	p.angular_velocity_min = -400.0
+	p.angular_velocity_max = 400.0
+	p.scale_amount_min = 0.5
+	p.scale_amount_max = 1.8
+	p.mesh = _chunk_mesh
+	world.add_child(p)
+	p.global_position = point
+	p.emitting = true
+	world.get_tree().create_timer(1.6).timeout.connect(p.queue_free)
 
 
 ## Небольшое попадание: брызги по направлению пули и пятно на стене за целью.

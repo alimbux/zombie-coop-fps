@@ -20,7 +20,9 @@ const ATTACK_INTERVAL := 1.0
 const GRAVITY := 18.0
 const HUNCH := -0.25
 const ARM_REACH := 1.45
-const MAX_WOUNDS := 8
+const MAX_WOUNDS := 40
+## Сколько ран на части тела, после которых одежда в этом месте пропитывается кровью.
+const SOAK_EVERY := 2
 const MAX_KNOCK := 14.0
 ## Если отдача разогнала зомби сильнее этого (дробовик в упор), он падает навзничь.
 const KNOCKDOWN_SPEED := 9.0
@@ -33,17 +35,17 @@ const KNEE_POS := Vector3(0.0, 0.46, 0.0)
 ## Сколько трупов лежит на уровне одновременно: самые старые убираются.
 const MAX_CORPSES := 30
 ## Прочность трупа: сколько ещё нужно всадить, чтобы он развалился на куски.
-const CORPSE_HP := 70.0
+const CORPSE_HP := 160.0
 
 ## pivot — шарнир (у головы и рук — относительно торса), size/center — зона попадания
 ## относительно шарнира.
 const ZONES := {
-	"torso": {"pivot": Vector3(0.0, 0.88, 0.0), "size": Vector3(0.5, 0.66, 0.32), "center": Vector3(0.0, 0.32, 0.0), "hp": 110.0, "mult": 1.0},
-	"head": {"pivot": Vector3(0.0, 0.6, 0.0), "size": Vector3(0.3, 0.34, 0.32), "center": Vector3(0.0, 0.16, -0.02), "hp": 30.0, "mult": 3.0},
-	"arm_l": {"pivot": Vector3(-0.25, 0.5, 0.0), "size": Vector3(0.15, 0.72, 0.15), "center": Vector3(0.0, -0.34, 0.0), "hp": 20.0, "mult": 1.0},
-	"arm_r": {"pivot": Vector3(0.25, 0.5, 0.0), "size": Vector3(0.15, 0.72, 0.15), "center": Vector3(0.0, -0.34, 0.0), "hp": 20.0, "mult": 1.0},
-	"leg_l": {"pivot": Vector3(-0.12, 0.88, 0.0), "size": Vector3(0.2, 0.88, 0.24), "center": Vector3(0.0, -0.44, -0.02), "hp": 26.0, "mult": 1.0},
-	"leg_r": {"pivot": Vector3(0.12, 0.88, 0.0), "size": Vector3(0.2, 0.88, 0.24), "center": Vector3(0.0, -0.44, -0.02), "hp": 26.0, "mult": 1.0},
+	"torso": {"pivot": Vector3(0.0, 0.88, 0.0), "size": Vector3(0.5, 0.66, 0.32), "center": Vector3(0.0, 0.32, 0.0), "hp": 260.0, "mult": 1.0},
+	"head": {"pivot": Vector3(0.0, 0.6, 0.0), "size": Vector3(0.3, 0.34, 0.32), "center": Vector3(0.0, 0.16, -0.02), "hp": 110.0, "mult": 1.5},
+	"arm_l": {"pivot": Vector3(-0.25, 0.5, 0.0), "size": Vector3(0.15, 0.72, 0.15), "center": Vector3(0.0, -0.34, 0.0), "hp": 70.0, "mult": 1.0},
+	"arm_r": {"pivot": Vector3(0.25, 0.5, 0.0), "size": Vector3(0.15, 0.72, 0.15), "center": Vector3(0.0, -0.34, 0.0), "hp": 70.0, "mult": 1.0},
+	"leg_l": {"pivot": Vector3(-0.12, 0.88, 0.0), "size": Vector3(0.2, 0.88, 0.24), "center": Vector3(0.0, -0.44, -0.02), "hp": 90.0, "mult": 1.0},
+	"leg_r": {"pivot": Vector3(0.12, 0.88, 0.0), "size": Vector3(0.2, 0.88, 0.24), "center": Vector3(0.0, -0.44, -0.02), "hp": 90.0, "mult": 1.0},
 }
 
 var zone_hp := {}
@@ -70,6 +72,8 @@ var _limp_arm := ""
 var _bad_leg := "leg_r"
 var _head_tilt := 0.0
 var _wounds := 0
+## Сколько ран на каждой части тела (для пропитывания одежды кровью).
+var _part_wounds := {}
 var _stumps := 0
 ## Сколько прошёл с последней отметки на полу и где была прошлая отметка.
 var _trail_left := 0.0
@@ -755,7 +759,8 @@ func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3, loud :=
 	alert()
 	push(_glance_dir(point, dir), force)
 	_jolt(zone, point, dir, force)
-	Gore.splash(get_parent(), point, dir, 16)
+	Gore.splash(get_parent(), point, dir, 24)
+	Gore.chunks(get_parent(), point, dir, randi_range(2, 5) + (3 if zone == "head" else 0))
 	if zone == "head" and not skull_open and is_glancing(point, dir):
 		_open_skull(point, dir)
 		return false
@@ -763,6 +768,9 @@ func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3, loud :=
 	zone_hp[zone] -= damage * float(def["mult"])
 	if zone_hp[zone] > 0.0:
 		_add_wound(zone, point, dir)
+		# Разбитая пулями голова раскалывается: верх черепа слетает, но зомби ещё жив.
+		if zone == "head" and not skull_open and zone_hp["head"] < float(def["hp"]) * 0.5:
+			_open_skull(point, dir)
 		if loud:
 			Sfx.play_at(get_parent(), "splat", point, -8.0)
 			Sfx.groan(self, "pain", -2.0)
@@ -879,24 +887,51 @@ func is_glancing(point: Vector3, dir: Vector3) -> bool:
 
 
 ## Рана: кровавое пятно на теле и струйка крови, бьющая из него несколько секунд.
+## Пятно растекается по одежде, ярко-красное или уже потемневшее, из-под него вниз
+## тянется потёк. Каждые несколько ран на одной части тела одежда там пропитывается
+## кровью целиком, так что изрешечённый зомби становится тёмно-красным.
 func _add_wound(zone: String, point: Vector3, dir: Vector3) -> void:
 	if _wounds >= MAX_WOUNDS or not parts.has(zone):
 		return
 	_wounds += 1
 	var part: Node3D = parts[zone]
 	var local := part.to_local(point)
-	Kit.add(part, Kit.sphere(0.035), Gore.blood_material(), local)
+	var mat: Material = Gore.blood_material() if randf() < 0.55 else Gore.dark_blood_material()
+	var size := randf_range(0.045, 0.07) * (1.3 if zone == "torso" else 1.0)
+	var blot := Kit.add(part, Kit.sphere(size), mat, local, Vector3.ZERO, Vector3(0.35, 0.35, 0.35))
+	blot.create_tween().tween_property(blot, "scale", Vector3(1.0, randf_range(1.0, 1.5), 0.8), randf_range(1.0, 2.5)).set_ease(Tween.EASE_OUT)
+	if randf() < 0.6:
+		# Потёк вниз от раны.
+		var run := Kit.add(part, Kit.capsule(0.012, randf_range(0.1, 0.2)), Gore.blood_material(), local + Vector3(0, -0.05, 0), Vector3.ZERO, Vector3(1, 0.2, 1))
+		run.create_tween().tween_property(run, "scale:y", 1.0, randf_range(1.5, 3.0))
 	var out: Vector3 = (local - Vector3(ZONES[zone]["center"])).normalized()
 	if out.length() < 0.5:
 		out = part.global_transform.basis.inverse() * -dir
-	Gore.bleed(part, local, out, randf_range(2.5, 4.0))
+	if _wounds <= 12 or randf() < 0.3:
+		Gore.bleed(part, local, out, randf_range(2.5, 4.0))
+	_part_wounds[zone] = int(_part_wounds.get(zone, 0)) + 1
+	if _part_wounds[zone] % SOAK_EVERY == 0:
+		_soak(part)
 
 
-## Скользящее попадание в голову: верх черепа слетает, мозги вываливаются и стекают.
-## Голова держится на честном слове: следующее попадание в неё убивает.
+## Одна из деталей части тела (рукав, штанина, кусок рубашки) пропитывается кровью.
+func _soak(part: Node3D) -> void:
+	var meshes: Array = []
+	for n in part.find_children("*", "MeshInstance3D", true, false):
+		var m := n as MeshInstance3D
+		if m.material_override != Gore.dark_blood_material() and m.material_override != Gore.blood_material() and m.name != "Cap":
+			meshes.append(m)
+	if meshes.is_empty():
+		return
+	var pick: MeshInstance3D = meshes.pick_random()
+	pick.material_override = Gore.dark_blood_material() if randf() < 0.7 else Gore.blood_material()
+
+
+## Скользящее попадание в голову или голова уже разбита пулями: верх черепа слетает,
+## мозги вываливаются и стекают. Голова держится, но вдвое слабее.
 func _open_skull(point: Vector3, dir: Vector3) -> void:
 	skull_open = true
-	zone_hp["head"] = minf(zone_hp["head"], 1.0)
+	zone_hp["head"] = maxf(1.0, minf(zone_hp["head"], float(ZONES["head"]["hp"]) * 0.5))
 	var head: Node3D = parts["head"]
 	var cap: Node3D = head.get_node_or_null("Cap")
 	var top := Vector3(0, 0.2, -0.01)
@@ -1202,7 +1237,8 @@ func _land() -> void:
 func hit_corpse(zone: String, damage: float, point: Vector3, dir: Vector3, force := 1.0) -> void:
 	if not dead or not zone_hp.has(zone):
 		return
-	Gore.splash(get_parent(), point, dir, 10)
+	Gore.splash(get_parent(), point, dir, 16)
+	Gore.chunks(get_parent(), point, dir, randi_range(1, 3))
 	_jolt(zone, point, dir, force * 1.4)
 	var flat := Vector3(dir.x, 0.0, dir.z).normalized()
 	_knock = (_knock + flat * force * 0.2).limit_length(4.0)
