@@ -1,10 +1,16 @@
 extends RefCounted
-## Звуки, синтезированные кодом: без сторонних файлов и лицензий.
-## Выстрел, попадание, хруст отрыва, мычание, рык и сдавленный крик зомби, удар по игроку, щелчки затвора.
+## Звуки игры. Почти все синтезированы кодом: попадание, хруст отрыва, мычание и рык зомби, удар по игроку.
+## Вскрики зомби от попаданий (pain, yelp, shriek, death) — записи с freesound (sounds/zombies, CC0).
+## Оружие звучит настоящими записями (sounds/weapons, лицензия CC0, см. sounds/weapons/LICENSE.md):
+## у пистолета, автомата и дробовика свои выстрел, перезарядка и сухой щелчок пустого магазина.
 ## У каждого звука несколько вариантов, чтобы повторы не резали слух.
 
 const RATE := 22050
 const MAX_GROANS := 6
+const GUNS := ["pistol", "smg", "shotgun"]
+const RECORDED_DIR := "res://sounds/weapons/"
+## Записанные вскрики зомби (freesound, CC0): pain, yelp, shriek, death. Мычание и рык — синтез.
+const ZOMBIE_DIR := "res://sounds/zombies/"
 ## Звуки попаданий по телу: у каждого шесть вариантов, а при проигрывании ещё и
 ## случайная высота, поэтому две пули подряд почти никогда не звучат одинаково.
 ##   hit_flesh — пуля в мясо: хлёсткий шлепок и глухой удар;
@@ -31,15 +37,33 @@ static var _active_groans := 0
 static func preload_all() -> void:
 	for sound in ["shot", "splat", "crunch", "groan", "growl", "pain", "hurt", "click", "reload", "slash", "pickup"] + HIT_SOUNDS + VOICE_SOUNDS:
 		stream(sound)
+	for gun in GUNS:
+		for sound in ["shot_", "reload_", "click_"]:
+			stream(sound + gun)
 
 
-static func stream(sound: String) -> AudioStreamWAV:
+static func stream(sound: String) -> AudioStream:
 	if not _cache.has(sound):
-		var variants: Array = []
-		for v in (6 if sound in HIT_SOUNDS or sound in VOICE_SOUNDS else 4):
-			variants.append(_wav(_synth(sound, v)))
+		var variants := _recorded(sound)
+		if variants.is_empty():
+			for v in (6 if sound in HIT_SOUNDS or sound in VOICE_SOUNDS else 4):
+				variants.append(_wav(_synth(sound, v)))
 		_cache[sound] = variants
 	return _cache[sound].pick_random()
+
+
+## Записанный звук: sound.wav или варианты sound_1.wav … sound_8.wav.
+static func _recorded(sound: String) -> Array:
+	var found: Array = []
+	for dir in [RECORDED_DIR, ZOMBIE_DIR]:
+		var single: String = dir + sound + ".wav"
+		if ResourceLoader.exists(single):
+			found.append(load(single))
+		for v in range(1, 9):
+			var path: String = dir + "%s_%d.wav" % [sound, v]
+			if ResourceLoader.exists(path):
+				found.append(load(path))
+	return found
 
 
 ## Звук в точке мира: громкость и панорама зависят от расстояния до слушателя.
@@ -90,6 +114,9 @@ static func groan(zombie: Node3D, sound := "groan", volume_db := -4.0, voice := 
 static func _synth(sound: String, variant: int) -> PackedFloat32Array:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash(sound) + variant * 7919
+	# Если записей оружия нет, звучит прежний синтезированный выстрел или щелчок.
+	if sound.get_slice("_", 0) in ["shot", "reload", "click"]:
+		sound = sound.get_slice("_", 0)
 	var out := _synth_raw(sound, rng)
 	# Попадания и шипение глушим: звонкие верха делают их игрушечными.
 	if sound in HIT_SOUNDS or sound in ["snarl", "gurgle", "splat", "crunch"]:
