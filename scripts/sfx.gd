@@ -1,5 +1,6 @@
 extends RefCounted
-## Звуки игры. Почти все синтезированы кодом: попадание, хруст отрыва, мычание, рык и крики зомби, удар по игроку.
+## Звуки игры. Почти все синтезированы кодом: попадание, хруст отрыва, мычание и рык зомби, удар по игроку.
+## Вскрики зомби от попаданий (pain, yelp, shriek, death) — записи с freesound (sounds/zombies, CC0).
 ## Оружие звучит настоящими записями (sounds/weapons, лицензия CC0, см. sounds/weapons/LICENSE.md):
 ## у пистолета, автомата и дробовика свои выстрел, перезарядка и сухой щелчок пустого магазина.
 ## У каждого звука несколько вариантов, чтобы повторы не резали слух.
@@ -8,6 +9,8 @@ const RATE := 22050
 const MAX_GROANS := 6
 const GUNS := ["pistol", "smg", "shotgun"]
 const RECORDED_DIR := "res://sounds/weapons/"
+## Записанные вскрики зомби (freesound, CC0): pain, yelp, shriek, death. Мычание и рык — синтез.
+const ZOMBIE_DIR := "res://sounds/zombies/"
 ## Звуки попаданий по телу: у каждого шесть вариантов, а при проигрывании ещё и
 ## случайная высота, поэтому две пули подряд почти никогда не звучат одинаково.
 ##   hit_flesh — пуля в мясо: хлёсткий шлепок и глухой удар;
@@ -49,16 +52,17 @@ static func stream(sound: String) -> AudioStream:
 	return _cache[sound].pick_random()
 
 
-## Записанный звук: sound.wav или варианты sound_1.wav … sound_4.wav.
+## Записанный звук: sound.wav или варианты sound_1.wav … sound_8.wav.
 static func _recorded(sound: String) -> Array:
 	var found: Array = []
-	var single := RECORDED_DIR + sound + ".wav"
-	if ResourceLoader.exists(single):
-		found.append(load(single))
-	for v in range(1, 5):
-		var path := RECORDED_DIR + "%s_%d.wav" % [sound, v]
-		if ResourceLoader.exists(path):
-			found.append(load(path))
+	for dir in [RECORDED_DIR, ZOMBIE_DIR]:
+		var single: String = dir + sound + ".wav"
+		if ResourceLoader.exists(single):
+			found.append(load(single))
+		for v in range(1, 9):
+			var path: String = dir + "%s_%d.wav" % [sound, v]
+			if ResourceLoader.exists(path):
+				found.append(load(path))
 	return found
 
 

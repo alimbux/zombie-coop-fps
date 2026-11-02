@@ -34,6 +34,9 @@ func _test_weapon_sounds() -> void:
 			var s: AudioStream = Sfx.stream(sound + gun)
 			_check(s != null and s.resource_path.begins_with(Sfx.RECORDED_DIR), "%s%s — запись, а не синтез" % [sound, gun])
 	_check(Sfx._cache["shot_pistol"].size() == 4, "у выстрела 4 варианта")
+	for voice in ["pain", "yelp", "shriek", "death"]:
+		var v: AudioStream = Sfx.stream(voice)
+		_check(v != null and v.resource_path.begins_with(Sfx.ZOMBIE_DIR), "вскрик %s — запись" % voice)
 
 
 func _test_menu() -> void:

@@ -4,7 +4,22 @@
 лицензия **CC0 1.0**: https://freesound.org/people/AbuNijmeh/sounds/318973/
 (переведён в моно, срезан гул ниже 30 Гц, нормализован).
 
-Все остальные файлы нарезаны из **Free Firearm Sound Library**
+Выстрелы пистолета и автомата, сухие щелчки пистолета и автомата и перезарядка
+автомата — тоже с freesound.org, **CC0 1.0** (их делает `tools/make_freesound_sounds.py`):
+
+| Файл | Запись |
+|---|---|
+| shot_pistol_1…4 | «9mm Pistol Gunshots», DledeSOUND — https://freesound.org/s/731942/ (четыре выстрела одного ствола) |
+| shot_smg_1…4 | MP5: «MP5 submachine gun down the street», Franki-01234 — https://freesound.org/s/201671/ и «Submachine gun automatic fire», SuperPhat — https://freesound.org/s/417689/ |
+| click_pistol | «9mm Handgun Being Dry Fired», serøutōnin--deprivəd — https://freesound.org/s/674568/ |
+| click_smg | «A rifle being dry fired once», serøutōnin--deprivəd — https://freesound.org/s/725402/ |
+| reload_smg | «Uzi submachine gun being reloaded while empty. Full sequence», serøutōnin--deprivəd — https://freesound.org/s/677160/ |
+
+Кроме пистолета, это куски из готовых нарезок открытого проекта
+https://github.com/webdevcody/survive-the-night-fps (client/audio/samples, все CC0,
+источники перечислены в его CREDITS.md): сам freesound из облака отвечал 403.
+
+Перезарядка пистолета и всё для дробовика, кроме выстрела, нарезаны из **Free Firearm Sound Library**
 (Бен Ящак / Still North Media, Kickstarter 2014), лицензия
 **CC0 1.0 Universal** (общественное достояние): можно использовать,
 менять и распространять в любых, в том числе коммерческих, проектах
@@ -19,13 +34,7 @@
 
 | Файл | Оружие в записи | Что это |
 |---|---|---|
-| shot_pistol_1, _2 | Colt 1911, .45 | выстрел вблизи (Prepared SFX/1911/A_42P) |
-| shot_pistol_3, _4 | Walther PPQ, 9 мм | выстрел вблизи (Prepared SFX/Walther PPQ/X_39P) |
-| shot_smg_1…4 | АК-47, 7.62x39 | одиночные выстрелы вблизи (Prepared SFX/AK-47/C_28P) |
 | shot_shotgun | дробовик | «Shotgun - Fire.wav», AbuNijmeh, freesound.org (CC0) |
 | reload_pistol | Colt 1911 | вынуть магазин, вставить полный, отпустить затвор (A_5, A_4, A_9) |
-| reload_smg | АК-47 | отстегнуть магазин, пристегнуть, передёрнуть затвор (C_11, C_10, C_14) |
 | reload_shotgun | Benelli Nova | три патрона в магазин и помпа (O_3, O_6) |
-| click_pistol | Colt 1911 | сухой щелчок спуска (A_19) |
-| click_smg | АК-47 | сухой щелчок спуска (C_7) |
 | click_shotgun | Benelli Nova | сухой щелчок спуска (O_8) |

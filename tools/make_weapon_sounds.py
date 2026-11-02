@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Нарезает звуки оружия из Free Firearm Sound Library (CC0) в sounds/weapons/.
+"""Нарезает звуки дробовика и перезарядку пистолета из Free Firearm Sound Library (CC0) в sounds/weapons/.
+Пистолет и автомат делает tools/make_freesound_sounds.py.
 
 Источник: https://github.com/buddingmonkey/FreeFirearmsSFXLibrary
 (зеркало библиотеки Бена Ящака с Kickstarter 2014 года, лицензия CC0 1.0).
@@ -35,20 +36,13 @@ OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sounds", "
 P = "Prepared SFX"
 M = "Master Tracks"
 
-# Выстрелы: (файл, начало выстрела в секундах). Берётся 10 мс до начала.
-SHOTS = {
-    # Пистолет: Colt 1911 (.45) и Walther PPQ (9 мм), ближняя дистанция.
-    "pistol": [(f"{P}/1911/A_42P.wav", 0.94), (f"{P}/1911/A_42P.wav", 5.01),
-               (f"{P}/Walther PPQ/X_39P.wav", 1.41), (f"{P}/Walther PPQ/X_39P.wav", 6.455)],
-    # Автомат: АК-47 (7.62x39), одиночные выстрелы вблизи.
-    "smg": [(f"{P}/AK-47/C_28P.wav", 0.61), (f"{P}/AK-47/C_28P.wav", 3.26),
-            (f"{P}/AK-47/C_28P.wav", 6.03), (f"{P}/AK-47/C_28P.wav", 9.175)],
-}
-# Длина хвоста выстрела: у автомата короче, чтобы очередь не превращалась в кашу.
-SHOT_LEN = {"pistol": 1.1, "smg": 0.55}
-SHOT_DRIVE = {"pistol": 6.0, "smg": 5.0}
-SHOT_ROOM = {"pistol": 0.3, "smg": 0.2}
-SHOT_LOWPASS = {"pistol": 8000, "smg": 8000}
+# Выстрелы пистолета и автомата, сухие щелчки и перезарядка автомата теперь с freesound.org,
+# их делает tools/make_freesound_sounds.py. Здесь остались дробовик и перезарядка пистолета.
+SHOTS = {}
+SHOT_LEN = {}
+SHOT_DRIVE = {}
+SHOT_ROOM = {}
+SHOT_LOWPASS = {}
 
 # Перезарядка собирается из отдельных движений: (файл, начало, длина, где поставить).
 RELOADS = {
@@ -56,10 +50,6 @@ RELOADS = {
     "pistol": [(f"{M}/1911/A_5.wav", 0.205, 0.35, 0.0),
                (f"{M}/1911/A_4.wav", 0.92, 0.4, 0.38),
                (f"{M}/1911/A_9.wav", 0.62, 0.4, 0.78)],
-    # 1.6 с: отстегнуть магазин, пристегнуть, передёрнуть затвор.
-    "smg": [(f"{M}/AK-47/C_11.wav", 0.30, 0.45, 0.0),
-            (f"{M}/AK-47/C_10.wav", 0.305, 0.45, 0.55),
-            (f"{M}/AK-47/C_14.wav", 0.37, 0.5, 1.05)],
     # 1.8 с: три патрона в трубчатый магазин и помпа.
     "shotgun": [(f"{M}/Nova/O_3.wav", 1.555, 0.3, 0.0),
                 (f"{M}/Nova/O_3.wav", 1.865, 0.3, 0.33),
@@ -68,8 +58,6 @@ RELOADS = {
 }
 # Сухой щелчок спуска, когда патронов нет.
 CLICKS = {
-    "pistol": (f"{M}/1911/A_19.wav", 0.7),
-    "smg": (f"{M}/AK-47/C_7.wav", 0.335),
     "shotgun": (f"{M}/Nova/O_8.wav", 0.255),
 }
 
