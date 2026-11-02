@@ -93,7 +93,9 @@ scripts/player_model.gd   фигуры четырёх персонажей
 scripts/mesh_kit.gd       общие меши и материалы для фигур
 scripts/gore.gd           кровь, раны, мозги, пятна, отлетающие части, hit-stop
 scripts/blood_stains.gd   формы кровавых пятен (рисуются процедурно в текстуры)
-scripts/sfx.gd            звуки, синтезированные кодом
+scripts/sfx.gd            звуки: зомби и удары синтезированы кодом, оружие из записей
+sounds/weapons/           записи выстрелов, перезарядок и щелчков (CC0, см. LICENSE.md там же)
+tools/make_weapon_sounds.py  нарезка записей оружия из Free Firearm Sound Library
 scripts/zombie_spawner.gd режим «Волны»
 scripts/test_room.gd      зал для режима «Волны»
 scripts/player_hud.gd     интерфейс половины экрана
