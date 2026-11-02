@@ -168,6 +168,26 @@ func _test_waves() -> void:
 		hits += 1
 	_check(z3.dead and hits == 8, "торс выдерживает 7 пуль пистолета, восьмая убивает (было %d)" % hits)
 	_check(z3._wounds >= 7 and z3._part_wounds.get("torso", 0) >= 7, "каждая пуля оставляет рану (%d)" % z3._wounds)
+	# Раны лежат на коже, а не висят в воздухе у тела.
+	var torso: Node3D = z3.parts["torso"]
+	var on_skin := 0
+	var total := 0
+	for w in torso.get_children():
+		if w.has_meta("wound"):
+			total += 1
+			var n: Vector3 = w.basis.y.normalized()
+			var hit: Dictionary = z3._surface_hit(torso, w.position + n * 0.3, -n)
+			# Над раной нет пустоты: первая поверхность по нормали не глубже самой раны.
+			if not hit.is_empty() and (w.position - (hit["pos"] as Vector3)).dot(n) < 0.015:
+				on_skin += 1
+	_check(total >= 7 and on_skin == total, "раны на поверхности тела (%d из %d)" % [on_skin, total])
+	var za = _spawn(world, Vector3(10, 0.1, -6))
+	await _frames(2)
+	var arm: Node3D = za.parts["arm_l"]
+	var elbow: Node3D = arm.get_node("Elbow")
+	za.take_hit("arm_l", 10.0, elbow.global_position + Vector3(0, -0.15, -0.3), Vector3.BACK)
+	var on_forearm := elbow.get_children().any(func(c): return c.has_meta("wound"))
+	_check(on_forearm, "рана на предплечье крепится к локтю и сгибается вместе с ним")
 	await _test_bodies(world)
 
 	var p1 = main.players[0]

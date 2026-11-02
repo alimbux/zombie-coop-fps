@@ -65,7 +65,7 @@ var gait := "walk"
 var skull_open := false
 var attack_cooldown := 0.0
 var speed_jitter := 1.0
-## Высота голоса: у каждого зомби свой, от басовитого до визгливого.
+## Высота голоса: у каждого зомби свой, от низкого хрипа до сиплого крика.
 var voice := 1.0
 var level = null
 ## Заметил ли игроков. В режиме волн зомби сразу знают, где все; на этажах — стоят, пока не заметят.
@@ -150,7 +150,7 @@ func _ready() -> void:
 	add_child(_capsule_node)
 
 	speed_jitter = randf_range(0.8, 1.3)
-	voice = randf_range(0.75, 1.3)
+	voice = randf_range(0.78, 1.05)
 	_groan_timer = randf_range(0.5, 4.0)
 	_phase = randf_range(0.0, TAU)
 	_head_tilt = randf_range(-0.35, 0.35)
@@ -933,34 +933,162 @@ func _add_wound(zone: String, point: Vector3, dir: Vector3) -> void:
 	_wounds += 1
 	var local := part.to_local(point)
 	var local_dir: Vector3 = (part.global_transform.basis.orthonormalized().inverse() * dir).normalized()
-	var center: Vector3 = ZONES[zone]["center"]
-	var out: Vector3 = local - center
-	out = out.normalized() if out.length() > 0.02 else -local_dir
-	if out.dot(-local_dir) < 0.0:
-		out = (out - local_dir).normalized()
+	# Зона попадания — коробка, а тело круглое: рану кладём точно на видимую
+	# поверхность и крепим к тому суставу, который двигается (предплечье, голень),
+	# иначе при сгибе рана остаётся висеть в воздухе.
+	var hit := _surface_hit(part, local - local_dir * 0.6, local_dir)
+	if hit.is_empty():
+		# Пуля чиркнула по краю зоны мимо тела: рану кладём туда, где тело ближе всего.
+		var to_center: Vector3 = (ZONES[zone]["center"] as Vector3) - local
+		if to_center.length() > 0.01:
+			to_center = to_center.normalized()
+			hit = _surface_hit(part, local - to_center * 0.6, to_center)
+	if hit.is_empty():
+		return
+	var holder: Node3D = hit["holder"]
+	var at: Vector3 = hit["pos"]
+	var out: Vector3 = hit["normal"]
+	var curve: float = hit["radius"]
+	var dir_h: Vector3 = (holder.global_transform.basis.orthonormalized().inverse() * dir).normalized()
 	var big := 1.6 if zone == "torso" else (1.3 if zone == "head" else 1.1)
-	_wound_mesh(part, local, out, local_dir, big, false)
+	_wound_mesh(holder, at, out, dir_h, big, false, curve)
 	if randf() < 0.6:
-		# Потёк вниз от раны.
-		var run := Kit.add(part, Kit.capsule(0.011, randf_range(0.1, 0.22)), Gore.blood_material(), local + Vector3(0, -0.06, 0) + out * 0.01, Vector3.ZERO, Vector3(1, 0.2, 1))
-		run.create_tween().tween_property(run, "scale:y", 1.0, randf_range(1.5, 3.0))
+		# Потёк вниз от раны, прижат к телу.
+		var down: Vector3 = holder.global_transform.basis.orthonormalized().inverse() * Vector3.DOWN
+		var slide := down - out * down.dot(out)
+		if slide.length() > 0.2:
+			slide = slide.normalized()
+			var length := randf_range(0.08, 0.16)
+			var reach := length * 0.5
+			var run := Kit.add(holder, Kit.capsule(0.01, length), Gore.blood_material(), at + slide * reach - out * (reach * reach / (2.0 * curve) - 0.004))
+			run.basis = Basis(slide.cross(out).normalized(), slide, out)
+			run.scale = Vector3(1, 0.2, 0.35)
+			run.create_tween().tween_property(run, "scale:y", 1.0, randf_range(1.5, 3.0))
 	if (zone == "torso" or zone == "head") and randf() < 0.65:
 		# Выходное отверстие на другой стороне: больше и рванее.
-		var depth: float = (ZONES[zone]["size"] as Vector3).z * 0.95
-		var exit_at := local + local_dir * depth
-		_wound_mesh(part, exit_at, local_dir, local_dir, big * 1.5, true)
+		var back := _surface_hit(part, local + local_dir * 0.8, -local_dir)
+		if not back.is_empty() and back["holder"] == holder:
+			_wound_mesh(holder, back["pos"], back["normal"], dir_h, big * 1.5, true, back["radius"])
 	if _wounds <= 12 or randf() < 0.3:
-		Gore.bleed(part, local, out, randf_range(2.5, 4.0))
+		Gore.bleed(holder, at, out, randf_range(2.5, 4.0))
+
+
+## Где луч (в осях части тела) впервые входит в видимое тело: шары, капсулы, коробки
+## из которых собрана часть. Возвращает сустав-держатель, точку и нормаль в его осях
+## и радиус кривизны поверхности (чтобы прижать края раны к круглому телу).
+func _surface_hit(part: Node3D, from: Vector3, dir: Vector3) -> Dictionary:
+	var best := {}
+	var best_t := INF
+	var inv_part := part.global_transform.affine_inverse()
+	for mi in part.find_children("*", "MeshInstance3D", true, false):
+		if not _is_body_mesh(mi, part):
+			continue
+		var xf: Transform3D = inv_part * mi.global_transform
+		var inv := xf.affine_inverse()
+		var o: Vector3 = inv * from
+		var d: Vector3 = inv.basis * dir
+		var res := _ray_shape(mi.mesh, o, d)
+		if res.is_empty() or res["t"] >= best_t:
+			continue
+		best_t = res["t"]
+		var n: Vector3 = (xf.basis.inverse().transposed() * res["n"]).normalized()
+		var holder: Node3D = mi.get_parent()
+		var hx: Transform3D = inv_part * holder.global_transform
+		var hp: Vector3 = hx.affine_inverse() * (from + dir * best_t)
+		var hn: Vector3 = (hx.basis.inverse().transposed() * n).normalized()
+		var sc := xf.basis.get_scale()
+		best = {"holder": holder, "pos": hp, "normal": hn, "radius": maxf(0.04, res["r"] * minf(sc.x, minf(sc.y, sc.z)))}
+	return best
+
+
+func _is_body_mesh(mi: Node, part: Node3D) -> bool:
+	var m: Mesh = mi.mesh
+	if not (m is SphereMesh or m is CapsuleMesh or m is BoxMesh):
+		return false
+	var n := mi.get_parent()
+	while n != null and n != part:
+		if n.has_meta("wound"):
+			return false
+		n = n.get_parent()
+	return n == part
+
+
+## Пересечение луча o + d·t с фигурой меша в его собственных осях.
+## Возвращает t, нормаль n и радиус кривизны r, или пусто.
+static func _ray_shape(m: Mesh, o: Vector3, d: Vector3) -> Dictionary:
+	if m is SphereMesh:
+		var t := _ray_sphere(o, d, Vector3.ZERO, m.radius)
+		return {} if t < 0.0 else {"t": t, "n": (o + d * t).normalized(), "r": m.radius}
+	if m is CapsuleMesh:
+		var r: float = m.radius
+		var h: float = maxf(m.height * 0.5 - r, 0.0)
+		var best := -1.0
+		# Боковая стенка: бесконечный цилиндр вдоль Y, только между полусферами.
+		var a := d.x * d.x + d.z * d.z
+		if a > 1e-9:
+			var b := o.x * d.x + o.z * d.z
+			var c := o.x * o.x + o.z * o.z - r * r
+			var disc := b * b - a * c
+			if disc >= 0.0:
+				var t := (-b - sqrt(disc)) / a
+				if t > 0.0 and absf(o.y + d.y * t) <= h:
+					best = t
+		for cy in [h, -h]:
+			var t := _ray_sphere(o, d, Vector3(0, cy, 0), r)
+			if t > 0.0 and (best < 0.0 or t < best):
+				best = t
+		if best < 0.0:
+			return {}
+		var p := o + d * best
+		return {"t": best, "n": (p - Vector3(0, clampf(p.y, -h, h), 0)).normalized(), "r": r}
+	if m is BoxMesh:
+		var half: Vector3 = m.size * 0.5
+		var t0 := -INF
+		var t1 := INF
+		var axis := 0
+		for k in 3:
+			if absf(d[k]) < 1e-9:
+				if absf(o[k]) > half[k]:
+					return {}
+				continue
+			var ta := (-half[k] - o[k]) / d[k]
+			var tb := (half[k] - o[k]) / d[k]
+			if ta > tb:
+				var tmp := ta
+				ta = tb
+				tb = tmp
+			if ta > t0:
+				t0 = ta
+				axis = k
+			t1 = minf(t1, tb)
+		if t0 > t1 or t0 <= 0.0:
+			return {}
+		var n := Vector3.ZERO
+		n[axis] = -signf(d[axis])
+		return {"t": t0, "n": n, "r": 1.0}
+	return {}
+
+
+static func _ray_sphere(o: Vector3, d: Vector3, c: Vector3, r: float) -> float:
+	var oc := o - c
+	var a := d.dot(d)
+	var b := oc.dot(d)
+	var cc := oc.dot(oc) - r * r
+	var disc := b * b - a * cc
+	if disc < 0.0:
+		return -1.0
+	var t := (-b - sqrt(disc)) / a
+	return t if t > 0.0 else -1.0
 
 
 ## Сама рана в осях части тела: at — точка на поверхности, out — наружу, along — полёт пули.
-func _wound_mesh(part: Node3D, at: Vector3, out: Vector3, along: Vector3, size: float, exit: bool) -> void:
+func _wound_mesh(part: Node3D, at: Vector3, out: Vector3, along: Vector3, size: float, exit: bool, curve := 0.15) -> void:
 	var w := Node3D.new()
 	w.name = "Wound"
+	w.set_meta("wound", true)
 	part.add_child(w)
 	w.position = at
 	w.basis = Gore.basis_from_up(out).rotated(out, randf_range(0.0, TAU))
-	var flat := Vector3(1, 0.3, 1)
 	# Дыра: чёрная глубина, вокруг тёмное мясо.
 	Kit.add(w, Kit.sphere(0.02 * size), Gore.hole_material(), Vector3(0, 0.006, 0), Vector3.ZERO, Vector3(1.0, 0.35, randf_range(1.0, 1.5)))
 	Kit.add(w, Kit.sphere(0.032 * size), Gore.dark_blood_material(), Vector3.ZERO, Vector3.ZERO, Vector3(1.2, 0.3, 1.0))
@@ -970,24 +1098,30 @@ func _wound_mesh(part: Node3D, at: Vector3, out: Vector3, along: Vector3, size: 
 		var a := TAU * i / shreds + randf_range(-0.3, 0.3)
 		var r := randf_range(0.024, 0.045) * size
 		var mat: Material = [Gore.blood_material(), Gore.dark_blood_material(), Gore.meat_material()].pick_random()
-		var shred := Kit.add(w, Kit.sphere(randf_range(0.01, 0.022) * size), mat, Vector3(cos(a) * r, randf_range(0.0, 0.008), sin(a) * r), Vector3(0, randf_range(0, TAU), 0), Vector3(randf_range(0.6, 1.8), 0.35, randf_range(0.5, 1.4)))
+		var shred := Kit.add(w, Kit.sphere(randf_range(0.01, 0.022) * size), mat, Vector3(cos(a) * r, randf_range(0.0, 0.006) - _sag(r, curve), sin(a) * r), Vector3(0, randf_range(0, TAU), 0), Vector3(randf_range(0.6, 1.8), 0.35, randf_range(0.5, 1.4)))
 		shred.rotation.y = -a
 	# Мясо торчит наружу (из выходной раны — больше).
 	for i in randi_range(1, 2) + (3 if exit else 0):
 		var a := randf_range(0.0, TAU)
 		var r := randf_range(0.0, 0.03) * size
-		Kit.add(w, Kit.box(Vector3(randf_range(0.012, 0.03), randf_range(0.01, 0.03), randf_range(0.012, 0.03)) * size), Gore.meat_material(), Vector3(cos(a) * r, randf_range(0.004, 0.018) * size, sin(a) * r), Vector3(randf_range(-0.8, 0.8), randf_range(0, TAU), randf_range(-0.8, 0.8)))
-	# Брызги по телу веером в сторону полёта пули (у выходной — от раны во все стороны).
+		Kit.add(w, Kit.box(Vector3(randf_range(0.012, 0.03), randf_range(0.01, 0.03), randf_range(0.012, 0.03)) * size), Gore.meat_material(), Vector3(cos(a) * r, randf_range(0.004, 0.014) * size - _sag(r, curve), sin(a) * r), Vector3(randf_range(-0.8, 0.8), randf_range(0, TAU), randf_range(-0.8, 0.8)))
+	# Брызги на коже рядом с раной в сторону полёта пули. Лежат плоско и прижаты
+	# к изгибу тела: далеко от раны не уходят, чтобы не торчать в воздухе.
 	var t: Vector3 = w.basis.inverse() * along
 	t.y = 0.0
 	var tangent := t.normalized() if t.length() > 0.05 else Vector3(1, 0, 0)
-	for i in randi_range(3, 6):
+	for i in randi_range(2, 4):
 		var d := tangent.rotated(Vector3.UP, randf_range(-0.7, 0.7)) if not exit else Vector3(1, 0, 0).rotated(Vector3.UP, randf_range(0, TAU))
-		var dist := randf_range(0.05, 0.16) * size
-		var drop := Kit.add(w, Kit.sphere(randf_range(0.005, 0.012) * size), Gore.blood_material(), d * dist + Vector3(0, 0.002, 0), Vector3.ZERO, Vector3(1.0, 0.3, randf_range(1.8, 3.2)))
+		var dist := minf(randf_range(0.045, 0.08) * size, curve * 0.6)
+		var drop := Kit.add(w, Kit.sphere(randf_range(0.006, 0.011) * size), Gore.blood_material(), d * dist + Vector3(0, 0.001 - _sag(dist, curve), 0), Vector3.ZERO, Vector3(1.0, 0.2, randf_range(1.4, 2.2)))
 		drop.rotation.y = atan2(d.x, d.z)
 	w.scale = Vector3.ONE * 0.4
 	w.create_tween().tween_property(w, "scale", Vector3.ONE, 0.12)
+
+
+## На сколько опустить деталь, отстоящую от центра раны на r, чтобы она легла на круглое тело.
+static func _sag(r: float, curve: float) -> float:
+	return r * r / (2.0 * curve)
 
 
 ## Сильно изрешечённая часть тела разворочена. Ступени по оставшейся прочности.
@@ -1430,7 +1564,12 @@ func _land() -> void:
 	corpse_center = at
 	var pool := Gore.floor_stain(get_parent(), at, "pool", randf_range(0.2, 0.28))
 	if pool:
-		var grown := pool.scale * randf_range(2.8, 3.6)
+		# Лужа растекается, но не дальше края пола или ступеньки.
+		var grown := pool.scale
+		for k in [randf_range(2.8, 3.6), 2.2, 1.5]:
+			if Gore.fits(get_parent(), pool.global_transform.orthonormalized(), pool.scale.x * k, pool.scale.z * k):
+				grown = pool.scale * k
+				break
 		grown.y = 1.0
 		pool.create_tween().tween_property(pool, "scale", grown, randf_range(4.0, 7.0)).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
 
