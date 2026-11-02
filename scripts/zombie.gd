@@ -784,8 +784,9 @@ func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3, loud :=
 		if zone == "head" and not skull_open and zone_hp["head"] < float(def["hp"]) * 0.5:
 			_open_skull(point, dir)
 		if loud:
-			Sfx.play_at(get_parent(), "splat", point, -8.0)
-			Sfx.groan(self, "pain", -2.0)
+			_hit_sound(zone, point)
+			if randf() < 0.55:
+				Sfx.groan(self, "pain", -2.0)
 		# Простреленная нога или изрешечённый корпус: подгибаются колени,
 		# зомби падает на колени и дальше ползёт на четвереньках.
 		if zone.begins_with("leg") and randf() < 0.6:
@@ -1064,6 +1065,25 @@ func _open_skull(point: Vector3, dir: Vector3) -> void:
 	_head_tilt = 0.5 * signf(_head_tilt if _head_tilt != 0.0 else 1.0)
 
 
+## Звук попадания зависит от зоны: голова — стук черепа, руки и ноги — то мясо,
+## то кость, корпус — мясо, иногда с чавканьем. Сверху иногда шлёпают брызги.
+## Каждый раз случайный вариант и высота, так что очередь не звучит как одна пуля.
+func _hit_sound(zone: String, point: Vector3) -> void:
+	var w := get_parent()
+	var pitch := randf_range(0.82, 1.18)
+	match zone:
+		"head":
+			Sfx.play_at(w, "hit_skull", point, -4.0, pitch)
+		"torso":
+			Sfx.play_at(w, "hit_flesh", point, -5.0, pitch * 0.92)
+			if randf() < 0.35:
+				Sfx.play_at(w, "squelch", point, -10.0, randf_range(0.85, 1.2))
+		_:
+			Sfx.play_at(w, "hit_bone" if randf() < 0.4 else "hit_flesh", point, -6.0, pitch * 1.08)
+	if randf() < 0.45:
+		Sfx.play_at(w, "spatter", point + Vector3.DOWN, -13.0, randf_range(0.9, 1.15))
+
+
 ## Предплечье с кистью отрывается: улетает куском, из локтя торчит раздробленная
 ## кость в клочьях мяса, хлещет кровь. Рука становится короче, попасть в неё труднее.
 func _tear_forearm(zone: String, dir: Vector3) -> void:
@@ -1084,7 +1104,8 @@ func _tear_forearm(zone: String, dir: Vector3) -> void:
 	_ragged_stump(arm, Vector3(0, ELBOW_Y, 0), Vector3.DOWN, 0.8)
 	Gore.burst(get_parent(), at, dir, 22)
 	Gore.chunks(get_parent(), at, dir, 8)
-	Sfx.play_at(get_parent(), "crunch", at, -1.0, 1.1)
+	Sfx.play_at(get_parent(), "tear", at, -1.0, randf_range(0.9, 1.15))
+	Sfx.play_at(get_parent(), "hit_bone", at, -5.0, randf_range(0.8, 1.0))
 	Sfx.groan(self, "pain", 0.0)
 	_arm_len[zone] = _arm_len[zone] * 0.55
 	# Зона попадания — только плечо.
@@ -1115,6 +1136,7 @@ func _sever(zone: String, point: Vector3, dir: Vector3) -> void:
 	Gore.burst(get_parent(), part.global_position, dir, 25)
 	Gore.chunks(get_parent(), part.global_position, dir, 10)
 	Sfx.play_at(get_parent(), "crunch", point, 0.0)
+	Sfx.play_at(get_parent(), "tear", point, -3.0, randf_range(0.8, 1.05))
 	Sfx.groan(self, "pain", 0.0)
 	_remove_part(zone)
 	if dead:
@@ -1408,7 +1430,8 @@ func hit_corpse(zone: String, damage: float, point: Vector3, dir: Vector3, force
 	zone_hp[zone] -= damage * float(ZONES[zone]["mult"])
 	if zone_hp[zone] > 0.0:
 		_add_wound(zone, point, dir)
-		Sfx.play_at(get_parent(), "splat", point, -10.0, 0.9)
+		# Пуля в труп: глуше и мокрее, чем в живого.
+		Sfx.play_at(get_parent(), ["hit_flesh", "squelch"].pick_random(), point, -9.0, randf_range(0.7, 0.95))
 		return
 	match zone:
 		"torso":

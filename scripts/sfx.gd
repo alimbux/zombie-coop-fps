@@ -5,6 +5,15 @@ extends RefCounted
 
 const RATE := 22050
 const MAX_GROANS := 6
+## Звуки попаданий по телу: у каждого шесть вариантов, а при проигрывании ещё и
+## случайная высота, поэтому две пули подряд почти никогда не звучат одинаково.
+##   hit_flesh — пуля в мясо: хлёсткий шлепок и глухой удар;
+##   hit_bone — по кости: сухой стук и треск;
+##   hit_skull — по черепу: тяжёлый костяной стук и хлюп;
+##   squelch — мокрое чавканье с пузырями (большая рана, выход пули, труп);
+##   spatter — кровь брызгами шлёпает по полу и стенам;
+##   tear — мясо рвётся (отрыв предплечья, руки, ноги).
+const HIT_SOUNDS := ["hit_flesh", "hit_bone", "hit_skull", "squelch", "spatter", "tear"]
 
 static var _cache := {}
 static var _active_groans := 0
@@ -12,14 +21,14 @@ static var _active_groans := 0
 
 ## Генерирует все звуки заранее, чтобы первый выстрел не подтормаживал.
 static func preload_all() -> void:
-	for sound in ["shot", "splat", "crunch", "groan", "growl", "pain", "hurt", "click", "reload", "slash", "pickup"]:
+	for sound in ["shot", "splat", "crunch", "groan", "growl", "pain", "hurt", "click", "reload", "slash", "pickup"] + HIT_SOUNDS:
 		stream(sound)
 
 
 static func stream(sound: String) -> AudioStreamWAV:
 	if not _cache.has(sound):
 		var variants: Array = []
-		for v in 4:
+		for v in (6 if sound in HIT_SOUNDS else 4):
 			variants.append(_wav(_synth(sound, v)))
 		_cache[sound] = variants
 	return _cache[sound].pick_random()
@@ -92,7 +101,172 @@ static func _synth(sound: String, variant: int) -> PackedFloat32Array:
 			return _slash(rng)
 		"pickup":
 			return _pickup()
+		"hit_flesh":
+			return _hit_flesh(rng)
+		"hit_bone":
+			return _hit_bone(rng, rng.randf_range(380.0, 700.0), 0.18)
+		"hit_skull":
+			return _mix(_hit_bone(rng, rng.randf_range(210.0, 360.0), 0.28), _scaled(_squelch(rng, 0.3), 0.5))
+		"squelch":
+			return _squelch(rng, rng.randf_range(0.3, 0.45))
+		"spatter":
+			return _spatter(rng)
+		"tear":
+			return _tear(rng)
 	return PackedFloat32Array()
+
+
+## Простой фильтр (state variable): возвращает полосу вокруг частоты fc.
+class Band:
+	var low := 0.0
+	var band := 0.0
+	var q := 0.7
+
+	func step(x: float, fc: float) -> float:
+		var f := 2.0 * sin(PI * minf(fc, 8000.0) / 22050.0)
+		low += f * band
+		var high := x - low - q * band
+		band += f * high
+		return band
+
+
+## Пуля в мясо: короткий хлёсткий шлепок (полоса шума повыше), под ним глухой
+## удар, падающий по высоте, и мокрый хвост, который «булькает» с неровной частотой.
+static func _hit_flesh(rng: RandomNumberGenerator) -> PackedFloat32Array:
+	var n := int(RATE * rng.randf_range(0.18, 0.28))
+	var out := PackedFloat32Array()
+	out.resize(n)
+	var slap := Band.new()
+	slap.q = rng.randf_range(0.4, 0.9)
+	var slap_fc := rng.randf_range(1500.0, 3400.0)
+	var lp := 0.0
+	var thud_f := rng.randf_range(65.0, 120.0)
+	var phase := 0.0
+	var wob := rng.randf_range(18.0, 45.0)
+	var wet_amp := rng.randf_range(0.7, 1.4)
+	var slap_decay := rng.randf_range(80.0, 120.0)
+	for i in n:
+		var t := float(i) / RATE
+		var noise := rng.randf_range(-1.0, 1.0)
+		var hit := slap.step(noise, slap_fc) * exp(-t * slap_decay) * 2.2
+		phase += thud_f * (1.0 - t * 2.5) / RATE
+		var thud := sin(TAU * phase) * exp(-t * 26.0)
+		lp += (noise - lp) * 0.14
+		var wet := lp * exp(-t * 15.0) * (0.55 + 0.45 * sin(TAU * wob * t + sin(t * 37.0))) * wet_amp * 2.0
+		out[i] = hit + thud * 0.85 + wet
+	return out
+
+
+## Удар по кости: несколько негармоничных обертонов (дерево, а не металл), быстро
+## гаснут; в начале — сухие треск-зёрна, под ними немного мяса.
+static func _hit_bone(rng: RandomNumberGenerator, f0: float, length: float) -> PackedFloat32Array:
+	var n := int(RATE * length)
+	var out := _scaled(_hit_flesh(rng), 0.45)
+	out.resize(n)
+	var ratios := [1.0, rng.randf_range(2.1, 2.5), rng.randf_range(3.4, 4.1), rng.randf_range(5.2, 6.3)]
+	for i in n:
+		var t := float(i) / RATE
+		var knock := 0.0
+		for k in ratios.size():
+			knock += sin(TAU * f0 * ratios[k] * t) * exp(-t * (40.0 + k * 25.0)) / (1.0 + k)
+		out[i] += knock * 1.3
+	for g in rng.randi_range(3, 6):
+		var start := int(rng.randf_range(0.0, 0.035) * RATE)
+		var len_g := int(rng.randf_range(0.002, 0.008) * RATE)
+		var amp := rng.randf_range(0.5, 1.0)
+		for j in len_g:
+			if start + j < n:
+				out[start + j] += rng.randf_range(-1.0, 1.0) * amp * (1.0 - float(j) / len_g)
+	return out
+
+
+## Мокрое чавканье: шум сквозь полосу, которая гуляет по высоте, и пузыри —
+## короткие свисты вверх, как лопающаяся пена.
+static func _squelch(rng: RandomNumberGenerator, length: float) -> PackedFloat32Array:
+	var n := int(RATE * length)
+	var out := PackedFloat32Array()
+	out.resize(n)
+	var bp := Band.new()
+	bp.q = 0.5
+	var f_lo := rng.randf_range(250.0, 450.0)
+	var f_hi := rng.randf_range(700.0, 1300.0)
+	for i in n:
+		var t := float(i) / RATE
+		var u := t / length
+		var fc := lerpf(f_lo, f_hi, sin(PI * u) * (0.6 + 0.4 * sin(t * 31.0)))
+		var env := minf(t / 0.01, 1.0) * exp(-u * 3.5)
+		out[i] = bp.step(rng.randf_range(-1.0, 1.0), fc) * env * 2.5
+	for b in rng.randi_range(4, 9):
+		var start := int(rng.randf_range(0.0, length * 0.8) * RATE)
+		var dur := rng.randf_range(0.01, 0.03)
+		var f1 := rng.randf_range(180.0, 400.0)
+		var f2 := f1 * rng.randf_range(1.6, 2.6)
+		var amp := rng.randf_range(0.25, 0.6)
+		var ph := 0.0
+		for j in int(dur * RATE):
+			if start + j >= n:
+				break
+			var v := float(j) / (dur * RATE)
+			ph += lerpf(f1, f2, v) / RATE
+			out[start + j] += sin(TAU * ph) * sin(PI * v) * amp
+	return out
+
+
+## Брызги: десятки мелких капель шлёпают по полу и стене, чаще сразу, потом реже.
+static func _spatter(rng: RandomNumberGenerator) -> PackedFloat32Array:
+	var n := int(RATE * 0.45)
+	var out := PackedFloat32Array()
+	out.resize(n)
+	var drops := rng.randi_range(12, 26)
+	for d in drops:
+		var start := int((0.02 + pow(rng.randf(), 2.0) * 0.38) * RATE)
+		var len_d := int(rng.randf_range(0.003, 0.012) * RATE)
+		var amp := rng.randf_range(0.2, 1.0)
+		var bp := Band.new()
+		bp.q = 0.8
+		var fc := rng.randf_range(1200.0, 4500.0)
+		for j in len_d:
+			if start + j >= n:
+				break
+			var v := float(j) / len_d
+			out[start + j] += bp.step(rng.randf_range(-1.0, 1.0), fc) * amp * (1.0 - v) * 3.0
+	return out
+
+
+## Мясо рвётся: густой треск волокон нарастает и обрывается, под ним мокрый гул.
+static func _tear(rng: RandomNumberGenerator) -> PackedFloat32Array:
+	var length := rng.randf_range(0.4, 0.6)
+	var n := int(RATE * length)
+	var out := _scaled(_squelch(rng, length), 0.7)
+	var grains := rng.randi_range(45, 80)
+	for g in grains:
+		var u := rng.randf()
+		u = sqrt(u) * 0.85
+		var start := int(u * length * RATE)
+		var len_g := int(rng.randf_range(0.002, 0.01) * RATE)
+		var amp := rng.randf_range(0.2, 0.9) * (0.4 + u)
+		var bp := Band.new()
+		bp.q = 0.6
+		var fc := rng.randf_range(700.0, 2600.0)
+		for j in len_g:
+			if start + j >= n:
+				break
+			out[start + j] += bp.step(rng.randf_range(-1.0, 1.0), fc) * amp * 2.5
+	# Последний рывок: глухой хлопок, когда кусок отделяется.
+	var pop := int(length * 0.82 * RATE)
+	for j in int(0.08 * RATE):
+		if pop + j >= n:
+			break
+		var t := float(j) / RATE
+		out[pop + j] += sin(TAU * 90.0 * t) * exp(-t * 35.0) * 0.9
+	return out
+
+
+static func _scaled(a: PackedFloat32Array, k: float) -> PackedFloat32Array:
+	var out := a.duplicate()
+	for i in out.size():
+		out[i] *= k
+	return out
 
 
 static func _shot(rng: RandomNumberGenerator) -> PackedFloat32Array:
