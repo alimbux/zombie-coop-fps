@@ -4,7 +4,11 @@
 Источник: https://github.com/buddingmonkey/FreeFirearmsSFXLibrary
 (зеркало библиотеки Бена Ящака с Kickstarter 2014 года, лицензия CC0 1.0).
 
-Запуск: python3 tools/make_weapon_sounds.py /путь/к/FreeFirearmsSFXLibrary
+Выстрел дробовика взят отдельно: «Shotgun - Fire.wav» от AbuNijmeh, тоже CC0,
+https://freesound.org/people/AbuNijmeh/sounds/318973/ (его выбрал Олег).
+Он почти не обрабатывается: моно, срез гула ниже 30 Гц, нормализация.
+
+Запуск: python3 tools/make_weapon_sounds.py /путь/к/FreeFirearmsSFXLibrary /путь/к/Shotgun-Fire.wav
 Нужны numpy и ffmpeg.
 
 Что делается с записями:
@@ -39,15 +43,12 @@ SHOTS = {
     # Автомат: АК-47 (7.62x39), одиночные выстрелы вблизи.
     "smg": [(f"{P}/AK-47/C_28P.wav", 0.61), (f"{P}/AK-47/C_28P.wav", 3.26),
             (f"{P}/AK-47/C_28P.wav", 6.03), (f"{P}/AK-47/C_28P.wav", 9.175)],
-    # Дробовик: Benelli Nova и Charles Daly, оба помповые 12 калибра.
-    "shotgun": [(f"{P}/Nova/O_21P.wav", 0.43), (f"{P}/Nova/O_21P.wav", 3.47),
-                (f"{P}/CD/H_21P.wav", 0.465), (f"{P}/CD/H_21P.wav", 3.08)],
 }
 # Длина хвоста выстрела: у автомата короче, чтобы очередь не превращалась в кашу.
-SHOT_LEN = {"pistol": 1.1, "smg": 0.55, "shotgun": 1.4}
-SHOT_DRIVE = {"pistol": 6.0, "smg": 5.0, "shotgun": 6.0}
-SHOT_ROOM = {"pistol": 0.3, "smg": 0.2, "shotgun": 0.35}
-SHOT_LOWPASS = {"pistol": 8000, "smg": 8000, "shotgun": 7000}
+SHOT_LEN = {"pistol": 1.1, "smg": 0.55}
+SHOT_DRIVE = {"pistol": 6.0, "smg": 5.0}
+SHOT_ROOM = {"pistol": 0.3, "smg": 0.2}
+SHOT_LOWPASS = {"pistol": 8000, "smg": 8000}
 
 # Перезарядка собирается из отдельных движений: (файл, начало, длина, где поставить).
 RELOADS = {
@@ -195,8 +196,15 @@ def save(name, x):
         w.writeframes(data)
 
 
-def main(lib):
+def shotgun_shot(path):
+    x = highpass(load("", os.path.abspath(path), 0.0, 10.0), 30.0)
+    x = x / np.abs(x).max() * 0.89
+    save("shot_shotgun", fade(x, 0.0005, 0.25))
+
+
+def main(lib, shotgun_file):
     os.makedirs(OUT, exist_ok=True)
+    shotgun_shot(shotgun_file)
     for gun, takes in SHOTS.items():
         sounds = []
         for path, t in takes:
@@ -230,4 +238,4 @@ def main(lib):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "FreeFirearmsSFXLibrary")
+    main(sys.argv[1], sys.argv[2])

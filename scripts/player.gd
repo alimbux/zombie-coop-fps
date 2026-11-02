@@ -329,7 +329,7 @@ func shoot() -> String:
 		_shake = maxf(_shake, 0.12 + 0.1 * float(stats["pellets"] > 1))
 		_muzzle.light_energy = 6.0
 		# Дробовик громче всех, очередь автомата тише одиночного выстрела, чтобы не глушила.
-		Sfx.play_flat(self, "shot_" + current, {"pistol": -4.0, "smg": -6.0, "shotgun": 0.0}.get(current, -4.0))
+		Sfx.play_flat(self, "shot_" + current, {"pistol": -4.0, "smg": -6.0, "shotgun": -3.0}.get(current, -4.0))
 		_alert_zombies(stats["noise"])
 	var first := ""
 	var hit_zombies := {}
