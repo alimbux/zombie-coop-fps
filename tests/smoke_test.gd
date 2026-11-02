@@ -363,9 +363,14 @@ func _test_waves() -> void:
 	_check(zl.parts.has("leg_l"), "две пули пистолета ногу не отрывают")
 	zl.take_hit("leg_l", Weapons.stat("pistol", "damage"), zl.global_position + Vector3.UP * 0.4, Vector3.FORWARD)
 	_check(not zl.parts.has("leg_l") and zl.crawling, "третья пуля отрывает ногу")
-	for i in 4:
-		zl.take_hit("arm_r", Weapons.stat("smg", "damage"), zl.parts["arm_r"].to_global(Vector3(0, -0.3, 0)), Vector3.FORWARD)
-	_check(not zl.parts.has("arm_r") and not zl.dead, "четыре пули автомата отрывают руку")
+	# Рука отрывается кусками: сначала предплечье с кистью, потом плечо.
+	zl.take_hit("arm_r", Weapons.stat("smg", "damage"), zl.parts["arm_r"].to_global(Vector3(0, -0.2, 0)), Vector3.FORWARD)
+	_check(zl.parts["arm_r"].get_node_or_null("Elbow") != null, "одна пуля автомата руку не трогает")
+	zl.take_hit("arm_r", Weapons.stat("smg", "damage"), zl.parts["arm_r"].to_global(Vector3(0, -0.2, 0)), Vector3.FORWARD)
+	_check(zl.parts.has("arm_r") and zl.parts["arm_r"].get_node_or_null("Elbow") == null, "вторая пуля отрывает предплечье, плечо осталось")
+	for i in 2:
+		zl.take_hit("arm_r", Weapons.stat("smg", "damage"), zl.parts["arm_r"].to_global(Vector3(0, -0.15, 0)), Vector3.FORWARD)
+	_check(not zl.parts.has("arm_r") and not zl.dead, "четвёртая пуля отрывает плечо")
 	_check(Weapons.stat("shotgun", "spread") >= 0.15 and Weapons.stat("shotgun", "pellets") == 10, "у дробовика широкий разлёт")
 
 	p1.switch_to("pistol")

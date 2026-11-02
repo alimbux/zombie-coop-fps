@@ -20,9 +20,13 @@ const ATTACK_INTERVAL := 1.0
 const GRAVITY := 18.0
 const HUNCH := -0.25
 const ARM_REACH := 1.45
-const MAX_WOUNDS := 40
+const MAX_WOUNDS := 22
 ## Сколько ран на части тела, после которых одежда в этом месте пропитывается кровью.
-const SOAK_EVERY := 2
+const SOAK_EVERY := 3
+## Локоть: где у руки шарнир предплечья (по оси руки от плеча).
+const ELBOW_Y := -0.3
+## Когда у руки остаётся меньше этой доли прочности, пули отрывают предплечье с кистью.
+const FOREARM_TEAR := 0.6
 const MAX_KNOCK := 14.0
 ## Если отдача разогнала зомби сильнее этого (дробовик в упор), он падает навзничь.
 const KNOCKDOWN_SPEED := 9.0
@@ -74,6 +78,8 @@ var _head_tilt := 0.0
 var _wounds := 0
 ## Сколько ран на каждой части тела (для пропитывания одежды кровью).
 var _part_wounds := {}
+## Насколько разворочена каждая часть тела (0 — нет, 1 — сильно, 2 — в клочья).
+var _gore_stage := {}
 var _stumps := 0
 ## Сколько прошёл с последней отметки на полу и где была прошлая отметка.
 var _trail_left := 0.0
@@ -234,17 +240,21 @@ func _build_body() -> void:
 		var arm := _pivot(zone, torso)
 		var sleeve := shirt if randf() < 0.6 else _skin
 		Kit.add(arm, Kit.capsule(0.056, 0.34), sleeve, Vector3(0, -0.15, 0))
-		Kit.add(arm, Kit.capsule(0.048, 0.32), _skin, Vector3(0, -0.44, -0.02), Vector3(0.15, 0, 0))
-		Kit.add(arm, Kit.box(Vector3(0.075, 0.1, 0.035)), _skin, Vector3(0, -0.63, -0.04))
-		Kit.add(arm, Kit.box(Vector3(0.065, 0.07, 0.02)), Kit.shade(0.3), Vector3(0, -0.7, -0.06), Vector3(0.6, 0, 0))
+		# Предплечье с кистью на локте: пули отрывают его раньше, чем всю руку.
+		var elbow := Kit.joint(arm, Vector3(0, ELBOW_Y, 0), "Elbow")
+		elbow.set_meta("hit_size", Vector3(0.12, 0.42, 0.12))
+		elbow.set_meta("hit_center", Vector3(0, -0.2, -0.02))
+		Kit.add(elbow, Kit.capsule(0.048, 0.32), _skin, Vector3(0, -0.14, -0.02), Vector3(0.15, 0, 0))
+		Kit.add(elbow, Kit.box(Vector3(0.075, 0.1, 0.035)), _skin, Vector3(0, -0.33, -0.04))
+		Kit.add(elbow, Kit.box(Vector3(0.065, 0.07, 0.02)), Kit.shade(0.3), Vector3(0, -0.4, -0.06), Vector3(0.6, 0, 0))
 		if randf() < 0.45:
 			# Пальцы в крови.
-			Kit.add(arm, Kit.box(Vector3(0.068, 0.04, 0.024)), Gore.blood_material(), Vector3(0, -0.73, -0.075), Vector3(0.6, 0, 0))
+			Kit.add(elbow, Kit.box(Vector3(0.068, 0.04, 0.024)), Gore.blood_material(), Vector3(0, -0.43, -0.075), Vector3(0.6, 0, 0))
 		if randf() < 0.25:
 			# Сломанная кость торчит из предплечья.
-			Kit.add(arm, Kit.capsule(0.016, 0.12), bone, Vector3(0.03, -0.42, -0.06), Vector3(0.9, 0, 0.5))
-			Kit.add(arm, Kit.sphere(0.03), Gore.blood_material(), Vector3(0.02, -0.42, -0.04), Vector3.ZERO, Vector3(1, 1, 0.5))
-		Kit.add(arm, Kit.sphere(0.03), rot, Vector3(randf_range(-0.03, 0.03), randf_range(-0.55, -0.35), -0.04), Vector3.ZERO, Vector3(1, 1.4, 0.5))
+			Kit.add(elbow, Kit.capsule(0.016, 0.12), bone, Vector3(0.03, -0.12, -0.06), Vector3(0.9, 0, 0.5))
+			Kit.add(elbow, Kit.sphere(0.03), Gore.blood_material(), Vector3(0.02, -0.12, -0.04), Vector3.ZERO, Vector3(1, 1, 0.5))
+		Kit.add(elbow, Kit.sphere(0.03), rot, Vector3(randf_range(-0.03, 0.03), randf_range(-0.25, -0.05), -0.04), Vector3.ZERO, Vector3(1, 1.4, 0.5))
 
 	for zone in ["leg_l", "leg_r"]:
 		var leg := _pivot(zone, body)
@@ -768,6 +778,8 @@ func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3, loud :=
 	zone_hp[zone] -= damage * float(def["mult"])
 	if zone_hp[zone] > 0.0:
 		_add_wound(zone, point, dir)
+		if zone.begins_with("arm") and zone_hp[zone] < float(def["hp"]) * FOREARM_TEAR:
+			_tear_forearm(zone, dir)
 		# Разбитая пулями голова раскалывается: верх черепа слетает, но зомби ещё жив.
 		if zone == "head" and not skull_open and zone_hp["head"] < float(def["hp"]) * 0.5:
 			_open_skull(point, dir)
@@ -887,31 +899,135 @@ func is_glancing(point: Vector3, dir: Vector3) -> bool:
 
 
 ## Рана: кровавое пятно на теле и струйка крови, бьющая из него несколько секунд.
-## Пятно растекается по одежде, ярко-красное или уже потемневшее, из-под него вниз
-## тянется потёк. Каждые несколько ран на одной части тела одежда там пропитывается
-## кровью целиком, так что изрешечённый зомби становится тёмно-красным.
+## Рваная рана, а не пятно: чёрная дыра, вокруг неровный край из клочьев крови и мяса,
+## по телу веером брызги в сторону полёта пули, вниз тянется потёк. Пуля в корпус или
+## голову часто выходит насквозь — со спины рана больше, с вырванным мясом.
+## Каждые несколько ран на части тела пропитывают кровью ещё кусок одежды, а сильно
+## изрешечённая часть тела разворочена: рёбра наружу, кость из руки или ноги.
 func _add_wound(zone: String, point: Vector3, dir: Vector3) -> void:
-	if _wounds >= MAX_WOUNDS or not parts.has(zone):
+	if not parts.has(zone):
 		return
-	_wounds += 1
 	var part: Node3D = parts[zone]
-	var local := part.to_local(point)
-	var mat: Material = Gore.blood_material() if randf() < 0.55 else Gore.dark_blood_material()
-	var size := randf_range(0.045, 0.07) * (1.3 if zone == "torso" else 1.0)
-	var blot := Kit.add(part, Kit.sphere(size), mat, local, Vector3.ZERO, Vector3(0.35, 0.35, 0.35))
-	blot.create_tween().tween_property(blot, "scale", Vector3(1.0, randf_range(1.0, 1.5), 0.8), randf_range(1.0, 2.5)).set_ease(Tween.EASE_OUT)
-	if randf() < 0.6:
-		# Потёк вниз от раны.
-		var run := Kit.add(part, Kit.capsule(0.012, randf_range(0.1, 0.2)), Gore.blood_material(), local + Vector3(0, -0.05, 0), Vector3.ZERO, Vector3(1, 0.2, 1))
-		run.create_tween().tween_property(run, "scale:y", 1.0, randf_range(1.5, 3.0))
-	var out: Vector3 = (local - Vector3(ZONES[zone]["center"])).normalized()
-	if out.length() < 0.5:
-		out = part.global_transform.basis.inverse() * -dir
-	if _wounds <= 12 or randf() < 0.3:
-		Gore.bleed(part, local, out, randf_range(2.5, 4.0))
 	_part_wounds[zone] = int(_part_wounds.get(zone, 0)) + 1
 	if _part_wounds[zone] % SOAK_EVERY == 0:
 		_soak(part)
+	_add_gore_stage(zone)
+	if _wounds >= MAX_WOUNDS:
+		return
+	_wounds += 1
+	var local := part.to_local(point)
+	var local_dir: Vector3 = (part.global_transform.basis.orthonormalized().inverse() * dir).normalized()
+	var center: Vector3 = ZONES[zone]["center"]
+	var out: Vector3 = local - center
+	out = out.normalized() if out.length() > 0.02 else -local_dir
+	if out.dot(-local_dir) < 0.0:
+		out = (out - local_dir).normalized()
+	var big := 1.6 if zone == "torso" else (1.3 if zone == "head" else 1.1)
+	_wound_mesh(part, local, out, local_dir, big, false)
+	if randf() < 0.6:
+		# Потёк вниз от раны.
+		var run := Kit.add(part, Kit.capsule(0.011, randf_range(0.1, 0.22)), Gore.blood_material(), local + Vector3(0, -0.06, 0) + out * 0.01, Vector3.ZERO, Vector3(1, 0.2, 1))
+		run.create_tween().tween_property(run, "scale:y", 1.0, randf_range(1.5, 3.0))
+	if (zone == "torso" or zone == "head") and randf() < 0.65:
+		# Выходное отверстие на другой стороне: больше и рванее.
+		var depth: float = (ZONES[zone]["size"] as Vector3).z * 0.95
+		var exit_at := local + local_dir * depth
+		_wound_mesh(part, exit_at, local_dir, local_dir, big * 1.5, true)
+	if _wounds <= 12 or randf() < 0.3:
+		Gore.bleed(part, local, out, randf_range(2.5, 4.0))
+
+
+## Сама рана в осях части тела: at — точка на поверхности, out — наружу, along — полёт пули.
+func _wound_mesh(part: Node3D, at: Vector3, out: Vector3, along: Vector3, size: float, exit: bool) -> void:
+	var w := Node3D.new()
+	w.name = "Wound"
+	part.add_child(w)
+	w.position = at
+	w.basis = Gore.basis_from_up(out).rotated(out, randf_range(0.0, TAU))
+	var flat := Vector3(1, 0.3, 1)
+	# Дыра: чёрная глубина, вокруг тёмное мясо.
+	Kit.add(w, Kit.sphere(0.02 * size), Gore.hole_material(), Vector3(0, 0.006, 0), Vector3.ZERO, Vector3(1.0, 0.35, randf_range(1.0, 1.5)))
+	Kit.add(w, Kit.sphere(0.032 * size), Gore.dark_blood_material(), Vector3.ZERO, Vector3.ZERO, Vector3(1.2, 0.3, 1.0))
+	# Рваный край: клочья разного размера и формы.
+	var shreds := randi_range(5, 8) + (3 if exit else 0)
+	for i in shreds:
+		var a := TAU * i / shreds + randf_range(-0.3, 0.3)
+		var r := randf_range(0.024, 0.045) * size
+		var mat: Material = [Gore.blood_material(), Gore.dark_blood_material(), Gore.meat_material()].pick_random()
+		var shred := Kit.add(w, Kit.sphere(randf_range(0.01, 0.022) * size), mat, Vector3(cos(a) * r, randf_range(0.0, 0.008), sin(a) * r), Vector3(0, randf_range(0, TAU), 0), Vector3(randf_range(0.6, 1.8), 0.35, randf_range(0.5, 1.4)))
+		shred.rotation.y = -a
+	# Мясо торчит наружу (из выходной раны — больше).
+	for i in randi_range(1, 2) + (3 if exit else 0):
+		var a := randf_range(0.0, TAU)
+		var r := randf_range(0.0, 0.03) * size
+		Kit.add(w, Kit.box(Vector3(randf_range(0.012, 0.03), randf_range(0.01, 0.03), randf_range(0.012, 0.03)) * size), Gore.meat_material(), Vector3(cos(a) * r, randf_range(0.004, 0.018) * size, sin(a) * r), Vector3(randf_range(-0.8, 0.8), randf_range(0, TAU), randf_range(-0.8, 0.8)))
+	# Брызги по телу веером в сторону полёта пули (у выходной — от раны во все стороны).
+	var t: Vector3 = w.basis.inverse() * along
+	t.y = 0.0
+	var tangent := t.normalized() if t.length() > 0.05 else Vector3(1, 0, 0)
+	for i in randi_range(3, 6):
+		var d := tangent.rotated(Vector3.UP, randf_range(-0.7, 0.7)) if not exit else Vector3(1, 0, 0).rotated(Vector3.UP, randf_range(0, TAU))
+		var dist := randf_range(0.05, 0.16) * size
+		var drop := Kit.add(w, Kit.sphere(randf_range(0.005, 0.012) * size), Gore.blood_material(), d * dist + Vector3(0, 0.002, 0), Vector3.ZERO, Vector3(1.0, 0.3, randf_range(1.8, 3.2)))
+		drop.rotation.y = atan2(d.x, d.z)
+	w.scale = Vector3.ONE * 0.4
+	w.create_tween().tween_property(w, "scale", Vector3.ONE, 0.12)
+
+
+## Сильно изрешечённая часть тела разворочена. Ступени по оставшейся прочности.
+func _add_gore_stage(zone: String) -> void:
+	if not zone_hp.has(zone) or not parts.has(zone):
+		return
+	var frac: float = zone_hp[zone] / float(ZONES[zone]["hp"])
+	var stage := 0
+	if frac < 0.55:
+		stage = 1
+	if frac < 0.25:
+		stage = 2
+	var had: int = _gore_stage.get(zone, 0)
+	if stage <= had:
+		return
+	_gore_stage[zone] = stage
+	var part: Node3D = parts[zone]
+	match zone:
+		"torso":
+			if stage >= 1 and had < 1:
+				# Грудь разворочена: тёмная яма, в ней рёбра.
+				var side: float = [-1.0, 1.0].pick_random()
+				var at := Vector3(0.08 * side, 0.36, -0.14)
+				Kit.add(part, Kit.sphere(0.09), Gore.dark_blood_material(), at, Vector3.ZERO, Vector3(1.0, 1.1, 0.35))
+				Kit.add(part, Kit.sphere(0.06), Gore.hole_material(), at + Vector3(0, 0, -0.012), Vector3.ZERO, Vector3(1.0, 1.0, 0.3))
+				for i in 3:
+					Kit.add(part, Kit.capsule(0.012, 0.13), Gore.bone_material(), at + Vector3(0, 0.05 - i * 0.045, -0.025), Vector3(0, 0, PI / 2 + randf_range(-0.2, 0.2)))
+				for i in 4:
+					Kit.add(part, Kit.box(Vector3(0.03, 0.025, 0.03)), Gore.meat_material(), at + Vector3(randf_range(-0.07, 0.07), randf_range(-0.07, 0.07), -0.03), Vector3(randf(), randf(), randf()))
+			if stage >= 2:
+				# Живот вспорот: кишки свисают.
+				Kit.add(part, Kit.sphere(0.08), Gore.hole_material(), Vector3(-0.02, 0.12, -0.13), Vector3.ZERO, Vector3(1.3, 0.9, 0.3))
+				for i in 4:
+					var gut := Kit.add(part, Kit.capsule(0.026, randf_range(0.18, 0.34)), Gore.meat_material(), Vector3(-0.06 + i * 0.035, 0.03 - i * 0.02, -0.16), Vector3(randf_range(-0.4, 0.4), 0, randf_range(-0.5, 0.5)))
+					gut.scale = Vector3(1, 0.2, 1)
+					gut.create_tween().tween_property(gut, "scale:y", 1.0, randf_range(0.6, 1.4))
+		"arm_l", "arm_r", "leg_l", "leg_r":
+			# Кость перебита и торчит из мяса.
+			var holder: Node3D = part
+			var y := randf_range(-0.2, -0.35) if zone.begins_with("arm") else randf_range(-0.15, -0.35)
+			if zone.begins_with("leg") and _knees.has(zone) and stage >= 2:
+				holder = _knees[zone]
+				y = randf_range(-0.1, -0.25)
+			var at := Vector3(0, y, -0.06)
+			Kit.add(holder, Kit.sphere(0.05), Gore.dark_blood_material(), at + Vector3(0, 0, 0.01), Vector3.ZERO, Vector3(1.2, 1.4, 0.6))
+			Kit.add(holder, Kit.capsule(0.017, 0.13), Gore.bone_material(), at + Vector3(0.01, 0.02, -0.03), Vector3(randf_range(0.6, 1.2), 0, randf_range(-0.6, 0.6)))
+			for i in 3:
+				Kit.add(holder, Kit.box(Vector3(0.025, 0.02, 0.025)), Gore.meat_material(), at + Vector3(randf_range(-0.03, 0.03), randf_range(-0.04, 0.04), -0.025), Vector3(randf(), randf(), randf()))
+		"head":
+			if stage >= 1 and had < 1:
+				# Щека разорвана: дыра в лице, видны зубы.
+				var x: float = [-0.06, 0.06].pick_random()
+				Kit.add(part, Kit.sphere(0.045), Gore.hole_material(), Vector3(x, 0.09, -0.09), Vector3.ZERO, Vector3(0.8, 1.0, 0.6))
+				Kit.add(part, Kit.sphere(0.055), Gore.dark_blood_material(), Vector3(x, 0.09, -0.08), Vector3.ZERO, Vector3(0.9, 1.1, 0.5))
+				for i in 4:
+					Kit.add(part, Kit.box(Vector3(0.012, 0.02, 0.012)), Gore.bone_material(), Vector3(x * 0.9, 0.075 + (i % 2) * 0.03, -0.11 + i * 0.008))
 
 
 ## Одна из деталей части тела (рукав, штанина, кусок рубашки) пропитывается кровью.
@@ -948,10 +1064,56 @@ func _open_skull(point: Vector3, dir: Vector3) -> void:
 	_head_tilt = 0.5 * signf(_head_tilt if _head_tilt != 0.0 else 1.0)
 
 
+## Предплечье с кистью отрывается: улетает куском, из локтя торчит раздробленная
+## кость в клочьях мяса, хлещет кровь. Рука становится короче, попасть в неё труднее.
+func _tear_forearm(zone: String, dir: Vector3) -> void:
+	var arm: Node3D = parts.get(zone)
+	if arm == null:
+		return
+	var elbow: Node3D = arm.get_node_or_null("Elbow")
+	if elbow == null:
+		return
+	var at := elbow.global_position
+	Gore.detach(get_parent(), elbow, dir * 3.5 + _knock + Vector3.UP * 2.0)
+	arm.remove_child(elbow)
+	elbow.queue_free()
+	# Раны и потёки, что были на предплечье, уходят вместе с ним.
+	for child in arm.get_children():
+		if child is Node3D and not (child is Area3D) and (child as Node3D).position.y < ELBOW_Y + 0.02:
+			child.queue_free()
+	_ragged_stump(arm, Vector3(0, ELBOW_Y, 0), Vector3.DOWN, 0.8)
+	Gore.burst(get_parent(), at, dir, 22)
+	Gore.chunks(get_parent(), at, dir, 8)
+	Sfx.play_at(get_parent(), "crunch", at, -1.0, 1.1)
+	Sfx.groan(self, "pain", 0.0)
+	_arm_len[zone] = _arm_len[zone] * 0.55
+	# Зона попадания — только плечо.
+	for area in arm.get_children():
+		if area is Area3D:
+			area.position = Vector3(0, ELBOW_Y / 2.0, 0)
+			var col: CollisionShape3D = area.get_child(0)
+			(col.shape as BoxShape3D).size = Vector3(0.15, absf(ELBOW_Y) + 0.04, 0.15)
+	arm.set_meta("hit_size", Vector3(0.15, absf(ELBOW_Y) + 0.04, 0.15))
+	arm.set_meta("hit_center", Vector3(0, ELBOW_Y / 2.0, 0))
+
+
+## Рваный обрубок: раздробленная кость, клочья мяса и кожи вокруг, бьёт кровь.
+func _ragged_stump(holder: Node3D, at: Vector3, out: Vector3, size := 1.0) -> void:
+	Kit.add(holder, Kit.sphere(0.055 * size), Gore.dark_blood_material(), at, Vector3.ZERO, Vector3(1.1, 0.6, 1.1))
+	Kit.add(holder, Kit.capsule(0.017 * size, 0.11 * size), Gore.bone_material(), at + out * 0.05 * size, Vector3(randf_range(-0.3, 0.3), 0, randf_range(-0.3, 0.3)))
+	for i in randi_range(5, 8):
+		var a := randf_range(0, TAU)
+		var r := randf_range(0.03, 0.06) * size
+		var mat: Material = [Gore.meat_material(), Gore.blood_material(), Gore.dark_blood_material(), _skin].pick_random()
+		Kit.add(holder, Kit.box(Vector3(randf_range(0.015, 0.035), randf_range(0.03, 0.07), randf_range(0.015, 0.035)) * size), mat, at + Vector3(cos(a) * r, 0, sin(a) * r) + out * randf_range(0.0, 0.04) * size, Vector3(randf_range(-0.7, 0.7), a, randf_range(-0.7, 0.7)))
+	Gore.bleed(holder, at, out, 5.0, 1.6)
+
+
 func _sever(zone: String, point: Vector3, dir: Vector3) -> void:
 	var part: Node3D = parts[zone]
 	Gore.detach(get_parent(), part, dir * 3.0 + _knock + Vector3.UP * 2.0)
 	Gore.burst(get_parent(), part.global_position, dir, 25)
+	Gore.chunks(get_parent(), part.global_position, dir, 10)
 	Sfx.play_at(get_parent(), "crunch", point, 0.0)
 	Sfx.groan(self, "pain", 0.0)
 	_remove_part(zone)
@@ -1030,9 +1192,10 @@ func _remove_part(zone: String) -> void:
 	_knees.erase(zone)
 	holder.remove_child(part)
 	part.queue_free()
-	# Красный обрубок, из которого ещё какое-то время хлещет кровь.
-	var stump := Kit.add(holder, Kit.sphere(0.09), Gore.blood_material(), at, Vector3.ZERO, Vector3(1, 0.7, 1))
+	# Рваный обрубок: кость, клочья мяса и кожи, из него ещё какое-то время хлещет кровь.
+	var stump := Kit.add(holder, Kit.sphere(0.08), Gore.blood_material(), at, Vector3.ZERO, Vector3(1, 0.6, 1))
 	var out := Vector3.UP if zone == "head" else (Vector3.DOWN if zone.begins_with("leg") else Vector3(signf(at.x), 0, 0))
+	_ragged_stump(holder, at, out, 1.4)
 	Gore.bleed(holder, at, out, 5.0, 2.0)
 	stump.name = "Stump_" + zone
 	_stumps += 1

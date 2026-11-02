@@ -11,6 +11,9 @@ const DEBRIS_LAYER := 16
 static var _blood_mat: StandardMaterial3D
 static var _brain_mat: StandardMaterial3D
 static var _dark_mat: StandardMaterial3D
+static var _meat_mat: StandardMaterial3D
+static var _hole_mat: StandardMaterial3D
+static var _bone_mat: StandardMaterial3D
 static var _chunk_mesh: BoxMesh
 static var _layer := 0
 static var _drop_mesh: BoxMesh
@@ -31,9 +34,41 @@ static func dark_blood_material() -> StandardMaterial3D:
 	if _dark_mat == null:
 		_dark_mat = StandardMaterial3D.new()
 		# Без освещения, как и яркая кровь, иначе в тени фильтр сделает её серой.
-		_dark_mat.albedo_color = Color(0.6, 0.0, 0.02)
+		_dark_mat.albedo_color = Color(0.38, 0.0, 0.02)
 		_dark_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	return _dark_mat
+
+
+## Мясо в ране: влажное, с бликом, фильтр оставляет его красным.
+static func meat_material() -> StandardMaterial3D:
+	if _meat_mat == null:
+		_meat_mat = StandardMaterial3D.new()
+		_meat_mat.albedo_color = Color(0.75, 0.12, 0.14)
+		_meat_mat.roughness = 0.25
+		_meat_mat.metallic_specular = 0.8
+	return _meat_mat
+
+
+## Чёрная глубина пулевого отверстия.
+static func hole_material() -> StandardMaterial3D:
+	if _hole_mat == null:
+		_hole_mat = StandardMaterial3D.new()
+		_hole_mat.albedo_color = Color(0.03, 0.0, 0.0)
+		_hole_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	return _hole_mat
+
+
+## Торчащая кость, рёбра.
+static func bone_material() -> StandardMaterial3D:
+	if _bone_mat == null:
+		_bone_mat = StandardMaterial3D.new()
+		_bone_mat.albedo_color = Color(0.92, 0.9, 0.85)
+		_bone_mat.roughness = 0.5
+	return _bone_mat
+
+
+static func basis_from_up(up: Vector3) -> Basis:
+	return _basis_from_up(up)
 
 
 ## Куски мяса, вылетающие из раны: тёмно-красные комки разного размера летят по пуле
@@ -56,7 +91,7 @@ static func chunks(world: Node3D, point: Vector3, dir: Vector3, amount: int) -> 
 	p.angular_velocity_min = -400.0
 	p.angular_velocity_max = 400.0
 	p.scale_amount_min = 0.5
-	p.scale_amount_max = 1.8
+	p.scale_amount_max = 1.2
 	p.mesh = _chunk_mesh
 	world.add_child(p)
 	p.global_position = point
