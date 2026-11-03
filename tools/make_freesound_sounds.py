@@ -3,9 +3,12 @@
 перезарядка автомата и вскрики зомби от попаданий.
 
 Пистолет — превью высокого качества записи https://freesound.org/s/731942/ (файл 731942.ogg).
+Автомат — «An AK-47 being shot», serøutōnin--deprivəd, https://freesound.org/s/855842/
+(файл shot_ak_1.ogg: та же запись, только обрезана тишина в начале, из github.com/birkmann/zugriff,
+assets/sounds/shot_ak_1.ogg — сам freesound из облака отвечает 403).
 Остальное — нарезки из открытого проекта webdevcody/survive-the-night-fps
 (client/audio/samples, всё CC0, см. там CREDITS.md и таблицу нарезок samples.js):
-gun_mp5.ogg, fol_dry.ogg, fol_mag_in.ogg, fol_mag_out.ogg, zv_pain.ogg, zv_death.ogg, zv_scream.ogg.
+fol_dry.ogg, fol_mag_in.ogg, fol_mag_out.ogg, zv_pain.ogg, zv_death.ogg, zv_scream.ogg.
 Откуда каждый звук — в sounds/weapons/LICENSE.md и sounds/zombies/LICENSE.md.
 
 Запуск: python3 tools/make_freesound_sounds.py /папка/с/исходниками
@@ -30,10 +33,14 @@ SHOTS = {
     # 9 мм, DledeSOUND «9mm Pistol Gunshots»: четыре выстрела одного ствола.
     "pistol": [("731942.ogg", 0.80, 1.1), ("731942.ogg", 3.72, 1.1),
                ("731942.ogg", 8.19, 1.1), ("731942.ogg", 9.39, 1.1)],
-    # MP5: одиночные выстрелы из настоящей очереди со своим хвостом.
-    "smg": [("gun_mp5.ogg", 0.0, 0.708), ("gun_mp5.ogg", 0.768, 0.708),
-            ("gun_mp5.ogg", 1.536, 0.708), ("gun_mp5.ogg", 2.304, 0.708)],
 }
+# Автомат: одиночный выстрел АК-47 с металлическим «калашниковским» хлопком
+# (serøutōnin--deprivəd, https://freesound.org/s/855842/, его выбрал Олег).
+# Хвост укорочен до 0.7 с, чтобы очередь (выстрел каждые 0.09 с) не сливалась в гул.
+# Четыре варианта: та же запись чуть быстрее и медленнее (высота и темп вместе).
+SMG_SHOT = "shot_ak_1.ogg"
+SMG_RATES = [1.0, 0.97, 1.03, 0.95]
+SMG_LEN = 0.7
 CLICKS = {
     "pistol": ("fol_dry.ogg", 0.319, 0.256),  # 9-мм пистолет, сухой спуск
     "smg": ("fol_dry.ogg", 0.0, 0.258),  # винтовка, сухой спуск
@@ -61,6 +68,17 @@ def cut(src, name, start, length, hp=30.0):
     return w.fade(x / (np.abs(x).max() + 1e-9), 0.002, min(0.15, length * 0.4))
 
 
+def smg_shots(src):
+    x = w.highpass(w.load(src, SMG_SHOT, 0.0, 2.0), 30.0)
+    x = x[np.argmax(np.abs(x) > np.abs(x).max() * 0.01):]  # без тишины в начале
+    out = []
+    for rate in SMG_RATES:
+        n = int(len(x) / rate)
+        y = np.interp(np.arange(n) * rate, np.arange(len(x)), x)[: int(w.SR * SMG_LEN)]
+        out.append(w.fade(y / np.abs(y).max(), 0.002, 0.4))
+    return out
+
+
 def save_to(folder, name, x):
     os.makedirs(folder, exist_ok=True)
     w.OUT = folder
@@ -74,6 +92,8 @@ def main(src):
         sounds = [cut(src, *t) for t in takes]
         for i, x in enumerate(w.fit(sounds, 0.2, rms_window=0.2)):
             save_to(weapons, f"shot_{gun}_{i + 1}", x)
+    for i, x in enumerate(w.fit(smg_shots(src), 0.16, rms_window=0.2)):
+        save_to(weapons, f"shot_smg_{i + 1}", x)
     for gun, (name, start, length) in CLICKS.items():
         save_to(weapons, f"click_{gun}", cut(src, name, start, length, 80.0) * 0.8)
     mix = np.zeros(int(w.SR * 1.45))
