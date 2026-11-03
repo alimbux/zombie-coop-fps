@@ -10,7 +10,7 @@
 | Файл | Запись |
 |---|---|
 | shot_pistol_1…4 | «9mm Pistol Gunshots», DledeSOUND — https://freesound.org/s/731942/ (четыре выстрела одного ствола) |
-| shot_smg_1…4 | «ak 47 - burst», ninebilly — https://freesound.org/s/520935/ (очередь АК-47: выстрелы 4, 6, 8 с хвостом последнего выстрела и последний выстрел целиком; оригинал взят из github.com/florian-rieder/ItsYourTurnToHide) |
+| shot_smg_1…4 | «An AK-47 being shot // has distinctive metallic kalashnikov-esque report // punchy sounding», serøutōnin--deprivəd — https://freesound.org/s/855842/ (одиночный выстрел, хвост обрезан до 0.7 с, 4 варианта с чуть разной скоростью; файл взят из github.com/birkmann/zugriff, assets/sounds/shot_ak_1.ogg) |
 | click_pistol | «9mm Handgun Being Dry Fired», serøutōnin--deprivəd — https://freesound.org/s/674568/ |
 | click_smg | «A rifle being dry fired once», serøutōnin--deprivəd — https://freesound.org/s/725402/ |
 | reload_smg | «Uzi submachine gun being reloaded while empty. Full sequence», serøutōnin--deprivəd — https://freesound.org/s/677160/ |
