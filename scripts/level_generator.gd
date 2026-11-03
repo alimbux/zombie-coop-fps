@@ -11,12 +11,17 @@ const HEIGHT := 3.2
 const WALL := 0.3
 const DOOR := 2.2
 const DOOR_HEIGHT := 2.4
+## Насколько сдвинута дверь от середины стены, если она у левого или правого края.
+const DOOR_SIDE := 2.6
 const MAX_ZOMBIES := 150
 const DIRS := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 
 var rng := RandomNumberGenerator.new()
 var cells: Array = []
 var links := {}
+## Сдвиг двери вдоль стены (по x или z) для каждой пары соседних комнат: 0 — по центру,
+## ±DOOR_SIDE — у одного из краёв.
+var door_offsets := {}
 var start_cell := Vector2i.ZERO
 var exit_cell := Vector2i.ZERO
 var exit_position := Vector3.ZERO
@@ -69,13 +74,24 @@ func next_waypoint(from: Vector3, to: Vector3) -> Vector3:
 		return to
 	var n: Vector2i = _next_hop[b][a]
 	var dir := Vector3(n.x - a.x, 0.0, n.y - a.y)
-	var door := (center(a) + center(n)) / 2.0
+	var door := door_position(a, n)
 	# Сначала выйти на линию двери, потом пройти сквозь проём.
 	var side := Vector3(dir.z, 0.0, dir.x).abs()
 	var off := (from - door) * side
 	if off.length() > 0.5 and absf((from - door).dot(dir)) > 1.0:
 		return door - dir * 1.0
 	return door + dir * 1.0
+
+
+## Середина проёма между соседними комнатами a и b.
+func door_position(a: Vector2i, b: Vector2i) -> Vector3:
+	var mid := (center(a) + center(b)) / 2.0
+	var off: float = door_offsets.get(_pair(a, b), 0.0)
+	return mid + (Vector3(0, 0, off) if a.x != b.x else Vector3(off, 0, 0))
+
+
+static func _pair(a: Vector2i, b: Vector2i) -> Array:
+	return [a, b] if a.x < b.x or (a.x == b.x and a.y < b.y) else [b, a]
 
 
 # --- Планировка -------------------------------------------------------------
@@ -100,6 +116,14 @@ func _layout(count: int) -> void:
 			if links.has(nb) and not links[c].has(nb) and rng.randf() < 0.15:
 				links[c].append(nb)
 				links[nb].append(c)
+	# Двери не всегда посередине стены: примерно треть у левого края, треть у правого.
+	door_offsets = {}
+	for c in cells:
+		for nb in links[c]:
+			var key := _pair(c, nb)
+			if not door_offsets.has(key):
+				var roll := rng.randf()
+				door_offsets[key] = 0.0 if roll < 0.4 else (-DOOR_SIDE if roll < 0.7 else DOOR_SIDE)
 
 
 func _compute_paths() -> void:
@@ -154,7 +178,7 @@ func _build_geometry(world: Node3D) -> void:
 		if c == start_cell or c == exit_cell or rng.randf() < 0.45:
 			_lamp(world, base)
 		if c != start_cell and c != exit_cell:
-			_props(world, base)
+			_props(world, c)
 	_exit_marker(world)
 
 
@@ -165,22 +189,34 @@ func _wall(world: Node3D, c: Vector2i, d: Vector2i, door: bool) -> void:
 	if not door:
 		_box(world, Vector3(WALL, HEIGHT, CELL) if along_z else Vector3(CELL, HEIGHT, WALL), mid, shade)
 		return
-	var seg := (CELL - DOOR) / 2.0
-	var shift := DOOR / 2.0 + seg / 2.0
-	for sign in [-1.0, 1.0]:
-		var offset := Vector3(0, 0, shift * sign) if along_z else Vector3(shift * sign, 0, 0)
+	# Проём: стена до двери и стена после неё, сдвиг двери вдоль стены — off.
+	var off: float = door_offsets.get(_pair(c, c + d), 0.0)
+	for side in [-1.0, 1.0]:
+		var near: float = off + side * DOOR / 2.0
+		var far: float = side * CELL / 2.0
+		var seg := absf(far - near)
+		if seg < 0.01:
+			continue
+		var along: float = (near + far) / 2.0
+		var offset := Vector3(0, 0, along) if along_z else Vector3(along, 0, 0)
 		_box(world, Vector3(WALL, HEIGHT, seg) if along_z else Vector3(seg, HEIGHT, WALL), mid + offset, shade)
 	var lintel_h := HEIGHT - DOOR_HEIGHT
-	var lintel_pos := Vector3(mid.x, DOOR_HEIGHT + lintel_h / 2.0, mid.z)
+	var door_mid := mid + (Vector3(0, 0, off) if along_z else Vector3(off, 0, 0))
+	var lintel_pos := Vector3(door_mid.x, DOOR_HEIGHT + lintel_h / 2.0, door_mid.z)
 	_box(world, Vector3(WALL, lintel_h, DOOR) if along_z else Vector3(DOOR, lintel_h, WALL), lintel_pos, shade)
 
 
 ## Мебель по углам комнаты, чтобы проходы между дверями оставались свободными.
-func _props(world: Node3D, base: Vector3) -> void:
-	var corners := [Vector2(-1, -1), Vector2(1, -1), Vector2(-1, 1), Vector2(1, 1)]
+## Угол, к которому прижата дверь, остаётся пустым.
+func _props(world: Node3D, c: Vector2i) -> void:
+	var base := center(c)
+	var corners: Array = []
+	for corner in [Vector2(-1, -1), Vector2(1, -1), Vector2(-1, 1), Vector2(1, 1)]:
+		if not _corner_has_door(c, corner):
+			corners.append(corner)
 	corners.shuffle()
 	var inset := CELL / 2.0 - 1.3
-	for i in rng.randi_range(1, 3):
+	for i in mini(rng.randi_range(1, 3), corners.size()):
 		var p: Vector2 = corners[i] * inset
 		var pos := base + Vector3(p.x, 0, p.y)
 		match rng.randi() % 3:
@@ -191,6 +227,20 @@ func _props(world: Node3D, base: Vector3) -> void:
 				_box(world, Vector3(1.6, 0.9, 0.9), pos + Vector3.UP * 0.45, 0.7, rng.randf_range(-0.3, 0.3))
 			2:
 				_box(world, Vector3(0.7, 2.1, 1.3), pos + Vector3.UP * 1.05, 0.6, 0.0)
+
+
+func _corner_has_door(c: Vector2i, corner: Vector2) -> bool:
+	for nb in links[c]:
+		var d: Vector2i = nb - c
+		var off: float = door_offsets.get(_pair(c, nb), 0.0)
+		if off == 0.0:
+			continue
+		# Стена по x (дверь сдвинута по z) или по z (дверь сдвинута по x).
+		if d.x != 0 and corner.x == d.x and corner.y == signf(off):
+			return true
+		if d.y != 0 and corner.y == d.y and corner.x == signf(off):
+			return true
+	return false
 
 
 func _lamp(world: Node3D, base: Vector3) -> void:
