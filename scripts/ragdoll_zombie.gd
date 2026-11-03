@@ -1,6 +1,6 @@
 extends CharacterBody3D
-## Эксперимент для сравнения: готовая модель человека (Quaternius, «Ultimate Animated
-## Character Pack», CC0) со скелетом, анимациями и рэгдоллом на PhysicalBone3D.
+## Эксперимент для сравнения: готовая модель человека (Quaternius, CC0) со скелетом,
+## анимациями и рэгдоллом на PhysicalBone3D. Модели две, см. PROFILES.
 ## В игру не входит, живёт только в тестовой сцене scenes/ragdoll_test.tscn.
 ##
 ## Что тут сделано поверх готового:
@@ -13,11 +13,9 @@ extends CharacterBody3D
 ## Отвечает тем же методам, что и наш зомби (take_hit, hit_corpse, kicked, push,
 ## alert), поэтому по нему работают выстрелы и удар ногой игрока.
 
-const MODEL := preload("res://assets/ragdoll_test/Zombie_Male.gltf")
 const Gore := preload("res://scripts/gore.gd")
 const Sfx := preload("res://scripts/sfx.gd")
 
-const SCALE := 0.74
 const SPEED := 1.25
 const GRAVITY := 18.0
 const ATTACK_RANGE := 1.3
@@ -37,32 +35,79 @@ const ZONES := {
 	"leg_r": {"hp": 90.0, "mult": 1.0},
 }
 
-## Кости рэгдолла: длина по оси кости, радиус капсулы, зона попадания, масса.
-## Размеры в единицах модели (до масштаба SCALE).
-const BONES := {
-	"Body_2": [0.3, 0.2, "torso", 12.0],
-	"Abdomen": [0.3, 0.19, "torso", 8.0],
-	"Torso": [0.5, 0.23, "torso", 10.0],
-	"Head": [0.42, 0.21, "head", 4.0],
-	"UpperArm.L": [0.52, 0.08, "arm_l", 2.0],
-	"LowerArm.L": [0.5, 0.075, "arm_l", 1.5],
-	"UpperArm.R": [0.52, 0.08, "arm_r", 2.0],
-	"LowerArm.R": [0.5, 0.075, "arm_r", 1.5],
-	"UpperLeg.L": [0.45, 0.12, "leg_l", 6.0],
-	"LowerLeg.L": [0.5, 0.1, "leg_l", 4.0],
-	"UpperLeg.R": [0.45, 0.12, "leg_r", 6.0],
-	"LowerLeg.R": [0.5, 0.1, "leg_r", 4.0],
+## Две модели на выбор (kind):
+## - "chibi": Quaternius «Ultimate Animated Character Pack», мультяшный зомби;
+## - "human": Quaternius «Universal Base Characters» с анимациями «Universal
+##   Animation Library» — обычные человеческие пропорции, анимации общие для всех
+##   персонажей набора.
+## Кости рэгдолла (bones): длина по оси кости, радиус капсулы, зона, масса.
+## Размеры в единицах модели (до масштаба scale). У обеих моделей ось кости — +Y.
+## react — какие кости обмякают от попадания в зону, пока зомби на ногах.
+const PROFILES := {
+	"chibi": {
+		"model": "res://assets/ragdoll_test/Zombie_Male.gltf",
+		"anims": "",
+		"scale": 0.74,
+		"walk": "Walk", "walk_speed": 0.8, "punch": "Punch", "rise": "StandUp", "loops": ["Walk", "Idle", "Run"],
+		"feet_ik": true, "hunch": false,
+		"root": "Body_2", "torso": "Torso", "head": "Head",
+		"lower_arm": "LowerArm.%s", "upper_arm": "UpperArm.%s", "lower_leg": "LowerLeg.%s", "side_upper": true,
+		"bones": {
+			"Body_2": [0.3, 0.2, "torso", 12.0],
+			"Abdomen": [0.3, 0.19, "torso", 8.0],
+			"Torso": [0.5, 0.23, "torso", 10.0],
+			"Head": [0.42, 0.21, "head", 4.0],
+			"UpperArm.L": [0.52, 0.08, "arm_l", 2.0],
+			"LowerArm.L": [0.5, 0.075, "arm_l", 1.5],
+			"UpperArm.R": [0.52, 0.08, "arm_r", 2.0],
+			"LowerArm.R": [0.5, 0.075, "arm_r", 1.5],
+			"UpperLeg.L": [0.45, 0.12, "leg_l", 6.0],
+			"LowerLeg.L": [0.5, 0.1, "leg_l", 4.0],
+			"UpperLeg.R": [0.45, 0.12, "leg_r", 6.0],
+			"LowerLeg.R": [0.5, 0.1, "leg_r", 4.0],
+		},
+		"react": {
+			"head": ["Head", "Torso"],
+			"torso": ["Abdomen", "Torso", "Head", "UpperArm.L", "LowerArm.L", "UpperArm.R", "LowerArm.R"],
+			"arm_l": ["UpperArm.L", "LowerArm.L"],
+			"arm_r": ["UpperArm.R", "LowerArm.R"],
+			"leg": ["Abdomen", "Torso", "Head", "UpperArm.L", "LowerArm.L", "UpperArm.R", "LowerArm.R"],
+		},
+	},
+	"human": {
+		"model": "res://assets/ragdoll_test/human/Superhero_Male_FullBody.gltf",
+		"anims": "res://assets/ragdoll_test/human/UAL1_Standard.glb",
+		"scale": 0.97,
+		"walk": "Walk", "walk_speed": 0.55, "punch": "Punch_Jab", "rise": "Idle", "loops": ["Walk", "Idle"],
+		"feet_ik": false, "hunch": true,
+		"root": "pelvis", "torso": "spine_03", "head": "Head",
+		"lower_arm": "lowerarm_%s", "upper_arm": "upperarm_%s", "lower_leg": "calf_%s", "side_upper": false,
+		"bones": {
+			"pelvis": [0.18, 0.15, "torso", 12.0],
+			"spine_01": [0.24, 0.14, "torso", 8.0],
+			"spine_03": [0.24, 0.16, "torso", 10.0],
+			"Head": [0.26, 0.11, "head", 4.0],
+			"upperarm_l": [0.25, 0.055, "arm_l", 2.0],
+			"lowerarm_l": [0.32, 0.045, "arm_l", 1.5],
+			"upperarm_r": [0.25, 0.055, "arm_r", 2.0],
+			"lowerarm_r": [0.32, 0.045, "arm_r", 1.5],
+			"thigh_l": [0.43, 0.08, "leg_l", 6.0],
+			"calf_l": [0.46, 0.06, "leg_l", 4.0],
+			"thigh_r": [0.43, 0.08, "leg_r", 6.0],
+			"calf_r": [0.46, 0.06, "leg_r", 4.0],
+		},
+		"react": {
+			"head": ["Head", "spine_03"],
+			"torso": ["spine_01", "spine_03", "Head", "upperarm_l", "lowerarm_l", "upperarm_r", "lowerarm_r"],
+			"arm_l": ["upperarm_l", "lowerarm_l"],
+			"arm_r": ["upperarm_r", "lowerarm_r"],
+			"leg": ["spine_01", "spine_03", "Head", "upperarm_l", "lowerarm_l", "upperarm_r", "lowerarm_r"],
+		},
+	},
 }
 
-## Какие кости обмякают от попадания в зону, пока зомби на ногах.
-const REACT := {
-	"head": ["Head", "Torso"],
-	"torso": ["Abdomen", "Torso", "Head", "UpperArm.L", "LowerArm.L", "UpperArm.R", "LowerArm.R"],
-	"arm_l": ["UpperArm.L", "LowerArm.L"],
-	"arm_r": ["UpperArm.R", "LowerArm.R"],
-	"leg_l": ["Abdomen", "Torso", "Head", "UpperArm.L", "LowerArm.L", "UpperArm.R", "LowerArm.R"],
-	"leg_r": ["Abdomen", "Torso", "Head", "UpperArm.L", "LowerArm.L", "UpperArm.R", "LowerArm.R"],
-}
+## Какую модель брать. Задаётся до добавления в сцену.
+var kind := "human"
 
 var dead := false
 var aware := true
@@ -85,6 +130,9 @@ var _attack_cd := 0.0
 var _groan := 0.0
 var _feet_on_legs := false
 var _lost := {}
+var _p: Dictionary
+var BONES: Dictionary
+var SCALE := 1.0
 
 
 func _ready() -> void:
@@ -104,25 +152,39 @@ func _ready() -> void:
 	shape.position.y = 0.85
 	add_child(shape)
 
-	_model = MODEL.instantiate()
+	_p = PROFILES[kind]
+	BONES = _p["bones"]
+	SCALE = _p["scale"]
+	_model = load(_p["model"]).instantiate()
 	_model.scale = Vector3.ONE * SCALE
 	# Модель смотрит в +Z, а тело идёт в -Z.
 	_model.rotation.y = PI
 	add_child(_model)
 	_skeleton = _model.find_children("*", "Skeleton3D", true, false)[0]
-	_anim = _model.find_children("*", "AnimationPlayer", true, false)[0]
+	if _p["anims"] == "":
+		_anim = _model.find_children("*", "AnimationPlayer", true, false)[0]
+	else:
+		# Анимации лежат в отдельном файле набора, скелет у всех персонажей общий.
+		_anim = AnimationPlayer.new()
+		_model.add_child(_anim)
+		_anim.add_animation_library("", _anim_library(_p["anims"]))
 	_recolor()
-	for loop in ["Walk", "Idle", "Run"]:
+	for loop in _p["loops"]:
 		_anim.get_animation(loop).loop_mode = Animation.LOOP_LINEAR
-	_anim.play("Walk", 0.2, 0.8)
+	_anim.play(_p["walk"], 0.2, _p["walk_speed"])
 	_anim.seek(randf() * 1.2, true)
 
 	# Тела собираются до того, как симулятор попадёт в скелет: так их привязка
 	# к костям проходит так же, как у сцены, сохранённой в редакторе.
+	if _p["hunch"]:
+		_skeleton.add_child(load("res://scripts/ragdoll_zombie_pose.gd").new())
 	_sim = PhysicalBoneSimulator3D.new()
 	for bone in BONES:
 		_add_body(bone)
 	_skeleton.add_child(_sim)
+	# Без рэгдолла симулятор всё равно переписывает позу костей, поэтому держим его
+	# влияние на нуле, пока тело не обмякнет.
+	_sim.influence = 0.0
 	_hider = load("res://scripts/ragdoll_bone_hider.gd").new()
 	_skeleton.add_child(_hider)
 
@@ -130,6 +192,9 @@ func _ready() -> void:
 ## Модель цветная, а у нас мир чёрно-белый: кожа и одежда в оттенки серого,
 ## кишки и мозг — тёмно-красные, их фильтр оставит красными.
 func _recolor() -> void:
+	if kind == "human":
+		_recolor_human()
+		return
 	var mesh_node: MeshInstance3D = _model.find_children("*", "MeshInstance3D", true, false)[0]
 	var tones := {"Skin": 0.42, "Clothes": 0.22, "Pants": 0.32, "DarkClothes": 0.12, "Bones": 0.75, "Face": 0.05}
 	for i in mesh_node.mesh.get_surface_count():
@@ -144,6 +209,31 @@ func _recolor() -> void:
 			var v: float = tones.get(key, 0.4)
 			m.albedo_color = Color(v, v, v)
 		mesh_node.set_surface_override_material(i, m)
+
+
+static var _libraries := {}
+
+
+static func _anim_library(path: String) -> AnimationLibrary:
+	if not _libraries.has(path):
+		var src: Node = load(path).instantiate()
+		var player: AnimationPlayer = src.find_children("*", "AnimationPlayer", true, false)[0]
+		_libraries[path] = player.get_animation_library("")
+		src.free()
+	return _libraries[path]
+
+
+## Текстуры у этой модели телесные, и фильтр окрасил бы кожу в розовый, как кровь.
+## Умножаем на серо-зелёный: кожа становится бледной трупной, без красного.
+func _recolor_human() -> void:
+	for mesh_node in _model.find_children("*", "MeshInstance3D", true, false):
+		for i in mesh_node.mesh.get_surface_count():
+			var src: Material = mesh_node.mesh.surface_get_material(i)
+			if not (src is StandardMaterial3D):
+				continue
+			var m: StandardMaterial3D = src.duplicate()
+			m.albedo_color = Color(0.6, 0.95, 0.95)
+			mesh_node.set_surface_override_material(i, m)
 
 
 ## Капсула рэгдолла вдоль кости (у этой модели ось кости — +Y) и сустав у её начала.
@@ -224,7 +314,7 @@ func _physics_process(delta: float) -> void:
 		if _rise <= 0.0:
 			_sim.physical_bones_stop_simulation()
 			_sim.influence = 0.0
-			_anim.play("Walk", 0.4, 0.8)
+			_anim.play(_p["walk"], 0.4, _p["walk_speed"])
 		return
 
 	var target = _nearest_player()
@@ -237,12 +327,12 @@ func _physics_process(delta: float) -> void:
 			rotation.y = lerp_angle(rotation.y, atan2(-to.x, -to.z), minf(delta * 4.0, 1.0))
 		if dist > ATTACK_RANGE:
 			move = -global_transform.basis.z * SPEED
-			if _anim.current_animation != "Walk":
-				_anim.play("Walk", 0.3, 0.8)
+			if _anim.current_animation != _p["walk"]:
+				_anim.play(_p["walk"], 0.3, _p["walk_speed"])
 		elif _attack_cd <= 0.0:
 			_attack_cd = 1.2
-			_anim.play("Punch", 0.15)
-			_anim.queue("Walk")
+			_anim.play(_p["punch"], 0.15)
+			_anim.queue(_p["walk"])
 			if target.has_method("take_damage"):
 				target.take_damage(ATTACK_DAMAGE)
 			Sfx.groan(self, "growl", -2.0, voice)
@@ -301,16 +391,16 @@ func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3, loud :=
 			_say(["pain", "yelp", "snarl"].pick_random(), -2.0 + CRY_DB)
 	if zone_hp["head"] <= 0.0 or zone_hp["torso"] <= 0.0:
 		if zone == "head":
-			_lose("Head", point, dir)
+			_lose(_p["head"], point, dir)
 		_die(bone, point, dir * force)
 		return true
 	if zone.begins_with("arm") and zone_hp[zone] <= 0.0:
-		var side := zone.right(1).to_upper()
-		_lose(("UpperArm." if _lost.has("LowerArm." + side) else "LowerArm.") + side, point, dir)
+		var lower := _side_bone("lower_arm", zone)
+		_lose(_side_bone("upper_arm", zone) if _lost.has(lower) else lower, point, dir)
 		zone_hp[zone] = ZONES[zone]["hp"] * 0.6
 	if zone.begins_with("leg") and zone_hp[zone] <= 0.0:
 		# Анимаций ползания в этом наборе нет: без ноги тело просто падает рэгдоллом.
-		_lose("LowerLeg." + zone.right(1).to_upper(), point, dir)
+		_lose(_side_bone("lower_leg", zone), point, dir)
 		_die(bone, point, dir * force)
 		return true
 	push(dir, force * 0.8)
@@ -337,7 +427,7 @@ func kicked(dir: Vector3, speed: float, damage: float) -> void:
 		return
 	zone_hp["torso"] -= damage
 	if zone_hp["torso"] <= 0.0:
-		_die("Torso", global_position + Vector3.UP, dir * speed * 0.5)
+		_die(_p["torso"], global_position + Vector3.UP, dir * speed * 0.5)
 		return
 	_ragdoll_all()
 	for bone in _bodies:
@@ -355,7 +445,7 @@ func _hit_react(zone: String, bone: String, point: Vector3, dir: Vector3) -> voi
 		return
 	_sim.physical_bones_stop_simulation()
 	var names: Array[StringName] = []
-	for b in REACT[zone]:
+	for b in _p["react"]["leg" if zone.begins_with("leg") else zone]:
 		if not _lost.has(b):
 			names.append(StringName(b))
 	_sim.physical_bones_start_simulation(names)
@@ -366,7 +456,7 @@ func _hit_react(zone: String, bone: String, point: Vector3, dir: Vector3) -> voi
 		pb.apply_impulse(dir * BULLET_IMPULSE, point - pb.global_position)
 	else:
 		# Пуля в ногу сгибает корпус вперёд.
-		_bodies["Torso"].apply_central_impulse(-dir * BULLET_IMPULSE * 0.6 + Vector3.DOWN * 4.0)
+		_bodies[_p["torso"]].apply_central_impulse(-dir * BULLET_IMPULSE * 0.6 + Vector3.DOWN * 4.0)
 
 
 func _die(bone: String, point: Vector3, impulse: Vector3) -> void:
@@ -399,22 +489,22 @@ func _ragdoll_all() -> void:
 ## в анимацию подъёма. Своей анимации «встать с пола» в наборе нет, берём StandUp
 ## (подъём со стула), поэтому переход виден.
 func _get_up() -> void:
-	var hips: Vector3 = _bodies["Body_2"].global_position
-	var head: Vector3 = _bodies["Torso"].global_position
+	var hips: Vector3 = _bodies[_p["root"]].global_position
+	var head: Vector3 = _bodies[_p["torso"]].global_position
 	var face := Vector3(hips.x - head.x, 0.0, hips.z - head.z)
 	global_position = Vector3(hips.x, global_position.y, hips.z)
 	if face.length() > 0.1:
 		rotation.y = atan2(-face.x, -face.z)
 	_feet_follow_legs(false)
-	_anim.play("StandUp", 0.0, 1.0)
-	_anim.queue("Walk")
+	_anim.play(_p["rise"], 0.0, 1.0)
+	_anim.queue(_p["walk"])
 	_rise = 0.8
 
 
 ## У этой модели ступни прикреплены к корню скелета (IK-риг), а не к голени, и в
 ## рэгдолле оставались бы на месте. На время рэгдолла переносим их на голени.
 func _feet_follow_legs(on: bool) -> void:
-	if _feet_on_legs == on:
+	if _feet_on_legs == on or not _p["feet_ik"]:
 		return
 	_feet_on_legs = on
 	for side in ["L", "R"]:
@@ -450,7 +540,7 @@ func _bone_at(zone: String, point: Vector3) -> String:
 		if d < best_d:
 			best_d = d
 			best = bone
-	return best if best != "" else "Torso"
+	return best if best != "" else _p["torso"]
 
 
 ## Рана — наклейка на кость: чёрная дыра и кровь вокруг, ложатся на поверхность
@@ -473,7 +563,7 @@ func _wound(bone: String, point: Vector3, dir: Vector3) -> void:
 	holder.basis = Gore.basis_from_up(out)
 	var splat := MeshInstance3D.new()
 	var disc := CylinderMesh.new()
-	disc.top_radius = randf_range(0.07, 0.11)
+	disc.top_radius = minf(randf_range(0.07, 0.11), float(BONES[bone][1]) * 0.6)
 	disc.bottom_radius = disc.top_radius
 	disc.height = 0.01
 	splat.mesh = disc
@@ -481,7 +571,7 @@ func _wound(bone: String, point: Vector3, dir: Vector3) -> void:
 	holder.add_child(splat)
 	var hole := MeshInstance3D.new()
 	var hd := CylinderMesh.new()
-	hd.top_radius = randf_range(0.03, 0.045)
+	hd.top_radius = minf(randf_range(0.03, 0.045), float(BONES[bone][1]) * 0.3)
 	hd.bottom_radius = hd.top_radius
 	hd.height = 0.02
 	hole.mesh = hd
@@ -512,7 +602,7 @@ func _lose(bone: String, point: Vector3, dir: Vector3) -> void:
 		_attach[parent_bone] = att
 	var stump := MeshInstance3D.new()
 	var s := SphereMesh.new()
-	var r: float = BONES[bone][1] * (0.9 if bone != "Head" else 0.6)
+	var r: float = BONES[bone][1] * (0.9 if bone != _p["head"] else 0.6)
 	s.radius = r
 	s.height = r * 1.2
 	stump.mesh = s
@@ -520,6 +610,11 @@ func _lose(bone: String, point: Vector3, dir: Vector3) -> void:
 	att.add_child(stump)
 	stump.global_position = _attach[bone].global_position
 	Gore.bleed(stump, Vector3.ZERO, Vector3.UP, 4.0, 1.0)
+
+
+func _side_bone(key: String, zone: String) -> String:
+	var side := zone.right(1)
+	return _p[key] % (side.to_upper() if _p["side_upper"] else side)
 
 
 func _hit_sound(zone: String, point: Vector3) -> void:

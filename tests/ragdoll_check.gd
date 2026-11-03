@@ -40,7 +40,7 @@ func _run() -> void:
 		_check(killed and model.dead, "пули в голову убивают")
 		for i in 90:
 			await physics_frame
-		var top: Vector3 = model._attach["Torso"].global_position
+		var top: Vector3 = model._attach[model._p["torso"]].global_position
 		_check(top.y < model.global_position.y + 0.7, "тело лежит на полу (грудь на высоте %.2f)" % (top.y - model.global_position.y))
 	print("ГОТОВО: ошибок ", _failures)
 	quit(_failures)

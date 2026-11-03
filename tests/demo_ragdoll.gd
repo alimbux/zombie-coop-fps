@@ -56,6 +56,7 @@ func _run() -> void:
 	a.global_position = o + Vector3(0.5, 0.1, -9.0)
 	a.gait = "walk"
 	var b = RagdollZombie.new()
+	b.kind = OS.get_environment("KIND") if OS.has_environment("KIND") else "human"
 	main.world.add_child(b)
 	b.global_position = o + Vector3(2.6, 0.1, -9.0)
 	for z in [a, b]:
@@ -113,11 +114,13 @@ func _run() -> void:
 
 func _target(z, zone: String) -> Vector3:
 	if z is RagdollZombie:
-		var bone: String = {"torso": "Torso", "head": "Head", "arm_r": "LowerArm.R", "arm_l": "LowerArm.L", "leg_l": "UpperLeg.L", "leg_r": "UpperLeg.R"}[zone]
-		if z._lost.has(bone):
-			bone = "UpperArm.R" if zone == "arm_r" else bone
+		var bone: String = z._p["torso"] if zone == "torso" else z._p["head"]
+		if zone.begins_with("arm"):
+			bone = z._side_bone("lower_arm", zone)
+			if z._lost.has(bone):
+				bone = z._side_bone("upper_arm", zone)
 		var att: Node3D = z._attach[bone]
-		return att.global_transform * Vector3(0, RagdollZombie.BONES[bone][0] * (0.45 if zone != "head" else 0.3), 0)
+		return att.global_transform * Vector3(0, z.BONES[bone][0] * (0.45 if zone != "head" else 0.4), 0)
 	var part = z.parts.get(zone)
 	if part == null:
 		part = z.parts["torso"]
