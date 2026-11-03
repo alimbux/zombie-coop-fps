@@ -69,6 +69,11 @@ func _ready() -> void:
 	start_button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	start_button.pressed.connect(start_game)
 	box.add_child(start_button)
+	# Эксперимент: готовая модель с рэгдоллом рядом с нашими зомби, для сравнения.
+	var test_button := _button("ТЕСТ: ГОТОВАЯ МОДЕЛЬ", 360)
+	test_button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	test_button.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/ragdoll_test.tscn"))
+	box.add_child(test_button)
 
 	box.add_child(_spacer(10))
 	box.add_child(_label(
