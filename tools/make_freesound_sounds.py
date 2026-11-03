@@ -81,7 +81,7 @@ def main(src):
         x = cut(src, name, start, length, 60.0)
         i = int(w.SR * at)
         mix[i:i + len(x)] += x[: len(mix) - i]
-    save_to(weapons, "reload_smg", w.limit(mix, 8.0, 0.03, 0.85))  # +8 дБ: слышно сквозь мычание
+    save_to(weapons, "reload_smg", mix / np.abs(mix).max() * 0.8)
     for voice, takes in VOICES.items():
         sounds = [cut(src, *t, 60.0) for t in takes]
         for i, x in enumerate(w.fit(sounds, 0.16, peak=0.85)):

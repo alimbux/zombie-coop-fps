@@ -436,7 +436,7 @@ func _start_reload() -> void:
 	if reload_left > 0.0 or mag[current] >= size or reserve[current] <= 0:
 		return
 	reload_left = Weapons.stat(current, "reload")
-	Sfx.play_flat(self, "reload_" + current, 0.0)
+	Sfx.play_flat(self, "reload_" + current, -3.0)
 
 
 func _finish_reload() -> void:

@@ -217,7 +217,7 @@ def main(lib, shotgun_file):
             i = int(SR * at)
             mix[i:i + len(x)] += x
         mix = darken(mix, 9000)
-        save(f"reload_{gun}", limit(mix, 8.0, 0.03, 0.85))  # +8 дБ: перезарядку слышно сквозь мычание
+        save(f"reload_{gun}", limit(mix, 0.0, 0.03, 0.8))
 
     for gun, (path, t) in CLICKS.items():
         x = darken(highpass(load(lib, path, t, 0.25), 80.0), 9000)
