@@ -1,7 +1,7 @@
 extends SceneTree
 ## Демо-ролик (не для CI): xvfb-run godot --rendering-driver opengl3 --write-movie out.avi --fixed-fps 30 --path . -s tests/demo_crawl.gd
 ## Четыре ползущих зомби наперегонки: на коленях, без ноги, без обеих ног и без ног
-## с обрубками рук. VIEW=plan — снимок этажа сверху без потолка (двери у краёв стен).
+## с обрубками рук. VIEW=oneleg — одноногий крупно сбоку у пола. VIEW=plan — снимок этажа сверху без потолка (двери у краёв стен).
 const Zombie := preload("res://scripts/zombie.gd")
 const GameConfig := preload("res://scripts/game_config.gd")
 const LevelGenerator := preload("res://scripts/level_generator.gd")
@@ -43,8 +43,15 @@ func _run() -> void:
 	lamp.light_energy = 2.4
 	main.world.add_child(lamp)
 	lamp.global_position = o + Vector3(1.0, 3.0, -8.0)
+	var lanes := [-2.4, -0.8, 0.8, 2.4]
+	if OS.get_environment("VIEW") == "oneleg":
+		# Крупно сбоку, на уровне пола: одноногий ползёт поперёк кадра.
+		lanes = [0.0]
+		cam.global_position = o + Vector3(3.2, 0.45, -7.5)
+		cam.look_at(o + Vector3(0, 0.25, -7.5), Vector3.UP)
+		cam.fov = 50.0
 	var zs := []
-	for x in [-2.4, -0.8, 0.8, 2.4]:
+	for x in lanes:
 		var z = Zombie.new()
 		main.world.add_child(z)
 		z.global_position = o + Vector3(x, 0.1, -12.0)
@@ -53,6 +60,17 @@ func _run() -> void:
 		zs.append(z)
 	await _f(5)
 	var back := Vector3(0, 0, 1)
+	if zs.size() == 1:
+		zs[0]._sever("leg_r", zs[0].global_position, back)
+		zs[0].speed_jitter = 1.0
+		for i in (int(OS.get_environment("FRAMES")) if OS.has_environment("FRAMES") else 600):
+			var at: Vector3 = zs[0].global_position
+			cam.global_position = at + Vector3(2.6, 0.45, 0.4)
+			cam.look_at(at + Vector3(0, 0.2, 0.4), Vector3.UP)
+			lamp.global_position = at + Vector3(1.5, 2.5, 0)
+			await physics_frame
+		quit(0)
+		return
 	zs[0]._start_kneel()
 	zs[1]._sever("leg_r", zs[1].global_position, back)
 	for leg in ["leg_l", "leg_r"]:

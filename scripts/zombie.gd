@@ -650,18 +650,19 @@ func _animate_crawl(s: float, delta: float) -> void:
 			torso.rotation = Vector3(lerpf(0.25, 0.04, low) + absf(s) * lerpf(0.06, 0.02, low), s * lerpf(0.1, 0.16, low), 0)
 			body.position.y = lerpf(0.1, 0.03, low)
 		_:
-			# На четвереньках без одной ноги: опирается на уцелевшую, тело заваливается
-			# на её сторону, руки загребают по очереди.
+			# Без одной ноги: лежит на животе, завалившись на бок уцелевшей ноги,
+			# подтягивается руками по очереди и отталкивается коленом.
 			var leg := "leg_l" if crawl_style == "left" else "leg_r"
 			if parts.has(leg):
-				parts[leg].rotation = Vector3(0.15 + 0.2 * s, 0, 0)
+				parts[leg].rotation = Vector3(0.1 + 0.18 * s, 0, 0)
+			var low := _low()
 			for zone in ["arm_l", "arm_r"]:
 				if parts.has(zone):
 					var phase := s if zone == "arm_l" else -s
-					parts[zone].rotation = Vector3(2.3 + 0.35 * phase, 0, 0.12 if zone == "arm_l" else -0.12)
-			var lean := 0.3 if crawl_style == "left" else -0.3
-			torso.rotation = Vector3(0.1, lean + s * 0.06, 0)
-			body.position.y = 0.16 - 0.06 * _low() + maxf(0.0, s) * 0.04
+					parts[zone].rotation = Vector3(lerpf(2.35, 2.0, low) + 0.45 * phase, 0, 0.25 if zone == "arm_l" else -0.25)
+			var lean := 0.2 if crawl_style == "left" else -0.2
+			torso.rotation = Vector3(lerpf(0.06, 0.0, low) + absf(s) * 0.04, lean + s * 0.06, 0)
+			body.position.y = lerpf(0.06, 0.03, low) + maxf(0.0, s) * 0.02
 	if parts.has("head"):
 		parts["head"].rotation.x = lerpf(-0.8, -0.35, _low()) + _hjerk.x
 		parts["head"].rotation.z = _head_tilt * 0.5 + _hjerk.y
@@ -1369,7 +1370,7 @@ func _start_crawl() -> void:
 	_sink = 0.0
 	for z in _knees:
 		_knees[z].rotation.x = 0.0
-	var tilt := -1.5 if crawl_style == "arms" else -1.3
+	var tilt := -1.5 if crawl_style == "arms" else -1.45
 	var tween := create_tween().set_parallel()
 	tween.tween_property(body, "rotation:x", tilt, 0.35).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
 	tween.tween_property(body, "position:y", 0.2, 0.35)
