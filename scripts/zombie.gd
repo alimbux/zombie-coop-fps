@@ -416,16 +416,40 @@ func _move_speed() -> float:
 		surge = 0.25 + 1.2 * absf(cos(_phase))
 	else:
 		surge = 0.35 + 1.3 * maxf(0.0, sin(_phase))
-	var arms := int(parts.has("arm_l")) + int(parts.has("arm_r"))
-	var factor := 0.75 if crawl_style == "arms" else (1.3 if crawl_style == "knees" else 1.0)
-	if arms < 2:
-		factor *= 0.7
-	return CRAWL_SPEED * speed_jitter * surge * factor
+	return CRAWL_SPEED * speed_jitter * surge * _crawl_factor()
+
+
+## Во сколько раз медленнее обычного ползёт. На коленях и четвереньках — вдвое медленнее
+## прежнего, на одной ноге — ещё медленнее, без ног — на руках, и чем меньше от рук
+## осталось, тем медленнее: обрубок без предплечья почти не тянет.
+func _crawl_factor() -> float:
+	var factor := 0.7
+	match crawl_style:
+		"arms":
+			factor = 0.36
+		"left", "right":
+			factor = 0.6
+	return factor * (0.25 + 0.375 * _arm_strength())
+
+
+## Сколько рук осталось: целая рука — 1, обрубок без предплечья — 0,4.
+func _arm_strength() -> float:
+	var total := 0.0
+	for zone in ["arm_l", "arm_r"]:
+		if parts.has(zone):
+			total += 1.0 if (parts[zone] as Node3D).has_node("Elbow") else 0.4
+	return total
+
+
+## Насколько тело прижато к полу: 0 — все руки целы, 1 — почти ничего не осталось.
+## Без ног и рук зомби волочится плашмя, голову от пола почти не поднимает.
+func _low() -> float:
+	return clampf((2.0 - _arm_strength()) / 1.6, 0.0, 1.0)
 
 
 ## Покачивание и шаги: ноги ходят, руки тянутся, голова болтается.
 func _animate(delta: float, walking: float) -> void:
-	var rate := (4.2 if not crawling else 3.0) * speed_jitter
+	var rate := (4.2 if not crawling else 3.0 * (0.55 + 0.45 * _crawl_factor())) * speed_jitter
 	if gait == "fast" and not crawling:
 		rate *= 1.5
 	_phase += delta * rate * maxf(walking, 0.25)
@@ -616,12 +640,15 @@ func _animate_crawl(s: float, delta: float) -> void:
 		"arms":
 			# Лежит на животе и подтягивается руками по очереди: одна тянется вперёд,
 			# другая упирается и тащит тело.
+			# Чем меньше осталось от рук, тем ниже: живот и грудь волочатся по полу,
+			# обрубки скребут, а не подтягивают.
+			var low := _low()
 			if parts.has("arm_l"):
-				parts["arm_l"].rotation = Vector3(2.35 + 0.45 * s, 0, 0.25)
+				parts["arm_l"].rotation = Vector3(lerpf(2.35, 2.0, low) + 0.45 * s, 0, 0.25)
 			if parts.has("arm_r"):
-				parts["arm_r"].rotation = Vector3(2.35 - 0.45 * s, 0, -0.25)
-			torso.rotation = Vector3(0.25 + absf(s) * 0.06, s * 0.1, 0)
-			body.position.y = 0.1
+				parts["arm_r"].rotation = Vector3(lerpf(2.35, 2.0, low) - 0.45 * s, 0, -0.25)
+			torso.rotation = Vector3(lerpf(0.25, 0.04, low) + absf(s) * lerpf(0.06, 0.02, low), s * lerpf(0.1, 0.16, low), 0)
+			body.position.y = lerpf(0.1, 0.03, low)
 		_:
 			# На четвереньках без одной ноги: опирается на уцелевшую, тело заваливается
 			# на её сторону, руки загребают по очереди.
@@ -634,9 +661,9 @@ func _animate_crawl(s: float, delta: float) -> void:
 					parts[zone].rotation = Vector3(2.3 + 0.35 * phase, 0, 0.12 if zone == "arm_l" else -0.12)
 			var lean := 0.3 if crawl_style == "left" else -0.3
 			torso.rotation = Vector3(0.1, lean + s * 0.06, 0)
-			body.position.y = 0.16 + maxf(0.0, s) * 0.04
+			body.position.y = 0.16 - 0.06 * _low() + maxf(0.0, s) * 0.04
 	if parts.has("head"):
-		parts["head"].rotation.x = -0.8 + _hjerk.x
+		parts["head"].rotation.x = lerpf(-0.8, -0.35, _low()) + _hjerk.x
 		parts["head"].rotation.z = _head_tilt * 0.5 + _hjerk.y
 	torso.rotation += _jerk * 0.6
 	var leg_left := "leg_l" if crawl_style == "left" else "leg_r"

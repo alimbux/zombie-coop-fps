@@ -21,6 +21,8 @@ func _initialize() -> void:
 func _run() -> void:
 	await _test_menu()
 	await _test_generator()
+	await _test_side_doors()
+	await _test_crawl_speeds()
 	await _test_waves()
 	await _test_escape()
 	_test_weapon_sounds()
@@ -87,6 +89,83 @@ func _test_generator() -> void:
 			_check(zombies > 0 and in_start == 0, "%s: зомби %d, в стартовой комнате нет" % [tag, zombies])
 			_check(medkits <= maxi(1, cells.size() / 5), "%s: аптечек %d — редко" % [tag, medkits])
 			world.free()
+	await _frames(1)
+
+
+## Двери бывают у края стены, и зомби сам проходит в такую дверь в соседнюю комнату.
+func _test_side_doors() -> void:
+	var counts := {"center": 0, "side": 0}
+	var world := Node3D.new()
+	root.add_child(world)
+	var gen = LevelGenerator.new()
+	gen.build(world, 8, 1, 4242)
+	for key in gen.door_offsets:
+		counts["center" if gen.door_offsets[key] == 0.0 else "side"] += 1
+	_check(counts["center"] > 0 and counts["side"] > 0, "двери и по центру (%d), и у края стены (%d)" % [counts["center"], counts["side"]])
+	var pair: Array = []
+	for key in gen.door_offsets:
+		if gen.door_offsets[key] != 0.0:
+			pair = key
+			break
+	for n in world.get_children():
+		if n is Zombie:
+			n.free()
+	var dummy := GDScript.new()
+	dummy.source_code = "extends Node3D\nvar downed := false\nfunc take_damage(_a) -> void:\n\tpass\n"
+	dummy.reload()
+	var target: Node3D = dummy.new()
+	target.add_to_group("players")
+	world.add_child(target)
+	target.global_position = gen.center(pair[1])
+	var z = Zombie.new()
+	z.level = gen
+	world.add_child(z)
+	z.global_position = gen.center(pair[0]) + Vector3.UP * 0.1
+	z.gait = "walk"
+	var frames := 0
+	while gen.cell_of(z.global_position) != pair[1] and frames < 900:
+		await physics_frame
+		frames += 1
+	_check(gen.cell_of(z.global_position) == pair[1], "зомби прошёл в дверь у края стены (%d кадров)" % frames)
+	world.free()
+	await _frames(1)
+
+
+## На коленях ползут медленнее, чем раньше; без ног медленнее, чем на коленях;
+## без ног и без рук — медленнее и ниже всех.
+func _test_crawl_speeds() -> void:
+	var world := Node3D.new()
+	root.add_child(world)
+	var cases := [["knees", []], ["left", ["leg_r"]], ["arms", ["leg_l", "leg_r"]], ["arms", ["leg_l", "leg_r", "arm_l"]]]
+	var factors: Array = []
+	var lows: Array = []
+	for c in cases:
+		var z = Zombie.new()
+		world.add_child(z)
+		z.crawling = true
+		z.crawl_style = c[0]
+		for part in c[1]:
+			z.parts.erase(part)
+		factors.append(z._crawl_factor())
+		lows.append(z._low())
+	# Без ног, одна рука и та без предплечья.
+	var stump = Zombie.new()
+	world.add_child(stump)
+	stump.crawling = true
+	stump.crawl_style = "arms"
+	stump.parts.erase("leg_l")
+	stump.parts.erase("leg_r")
+	stump.parts.erase("arm_l")
+	stump.parts["arm_r"].get_node("Elbow").free()
+	factors.append(stump._crawl_factor())
+	lows.append(stump._low())
+	_check(factors[0] < 1.0, "на коленях медленнее прежнего (%.2f < 1.3)" % (factors[0] * 1.3))
+	var ordered := true
+	for i in range(1, factors.size()):
+		ordered = ordered and factors[i] < factors[i - 1]
+	_check(ordered, "чем меньше конечностей, тем медленнее ползёт %s" % str(factors))
+	_check(lows[3] > lows[2] and lows[4] > lows[3] and lows[2] == 0.0, "без рук ползёт ниже %s" % str(lows))
+	world.free()
 	await _frames(1)
 
 
