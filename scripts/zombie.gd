@@ -337,6 +337,7 @@ func _physics_process(delta: float) -> void:
 		_spin *= exp(-delta * 2.0)
 		move_and_slide()
 		_animate(delta, 0.0)
+		_keep_above_floor()
 		return
 	if not aware:
 		_look_timer -= delta
@@ -345,6 +346,7 @@ func _physics_process(delta: float) -> void:
 			_look_for_players()
 		move_and_slide()
 		_animate(delta, 0.0)
+		_keep_above_floor()
 		return
 	if _kneel > 0.0:
 		_kneel -= delta
@@ -375,6 +377,7 @@ func _physics_process(delta: float) -> void:
 	move_and_slide()
 	_leave_trail()
 	_animate(delta, 1.0 if moving else 0.0)
+	_keep_above_floor()
 
 
 ## Раненый оставляет за собой капли, ползущий — сплошной размазанный след.
@@ -633,6 +636,9 @@ static func _arm_torque_z(angle: float, ge: Vector3) -> float:
 
 func _animate_crawl(s: float, delta: float) -> void:
 	var torso: Node3D = parts["torso"]
+	if crawl_style != "knees":
+		var tilt := -1.5 if crawl_style == "arms" else -1.45
+		body.rotation.x = move_toward(body.rotation.x, tilt, delta * 6.0)
 	match crawl_style:
 		"knees":
 			_animate_knees(s, delta)
@@ -700,6 +706,143 @@ func _animate_knees(s: float, delta: float) -> void:
 	if parts.has("head"):
 		parts["head"].rotation.x = lerpf(0.25 + sway * 0.1, 0.95, down) + _hjerk.x
 		parts["head"].rotation.z = _head_tilt + _hjerk.y
+
+
+## Пол непроницаем: ни одна часть тела ползущего не уходит под него. Если корпус
+## или голова ушли вниз, всё тело приподнимается; если рука или нога — сустав
+## поворачивается ровно настолько, чтобы она легла на пол, а не сквозь него.
+const FLOOR_GAP := 0.005
+
+func _keep_above_floor() -> void:
+	if body == null:
+		return
+	if not (crawling or dead or knocked_down > 0.0 or _fall > 0.05):
+		# Идущий: руки до пола не достают, проверить только ступни — если ушли
+		# в пол, приподнять всё тело.
+		if not is_on_floor():
+			return
+		var stand_y := global_position.y + FLOOR_GAP
+		var feet := INF
+		for zone in ["leg_l", "leg_r"]:
+			if parts.has(zone):
+				feet = minf(feet, _lowest(parts[zone]))
+		if feet < stand_y:
+			body.position.y += stand_y - feet
+		return
+	var floor_y := _floor_height() + FLOOR_GAP
+	if floor_y == -INF:
+		return
+	var torso: Node3D = parts.get("torso")
+	if torso == null:
+		return
+	var core := _lowest(torso, true)
+	if parts.has("head"):
+		core = minf(core, _lowest(parts["head"]))
+	if core < floor_y:
+		body.position.y += floor_y - core
+	for zone in ["arm_l", "arm_r", "leg_l", "leg_r"]:
+		if not parts.has(zone):
+			continue
+		var limb: Node3D = parts[zone]
+		var knee: Node3D = _knees.get(zone)
+		if knee != null:
+			_lift_joint(knee, knee, floor_y)
+		var before := limb.rotation.x
+		_lift_joint(limb, limb, floor_y)
+		if _arm_state.has(zone) and limb.rotation.x != before:
+			# Рука-маятник упёрлась в пол: дальше качается от пола, а не сквозь него.
+			var st: Array = _arm_state[zone]
+			st[0] = limb.rotation.x
+			st[1] *= -0.2
+	# Если сустав не смог вывести конечность из пола (упёрлась), поднять всё тело.
+	var low := INF
+	for zone in ["arm_l", "arm_r", "leg_l", "leg_r"]:
+		if parts.has(zone):
+			low = minf(low, _lowest(parts[zone]))
+	if low < floor_y:
+		body.position.y += floor_y - low
+
+
+## Высота пола под зомби (луч вниз только по стенам и полу уровня).
+func _floor_height() -> float:
+	var from := global_position + Vector3.UP * 0.6
+	var q := PhysicsRayQueryParameters3D.create(from, from + Vector3.DOWN * 1.6, 1)
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if hit.is_empty():
+		return -INF
+	return (hit["position"] as Vector3).y
+
+
+## Поворачивает сустав вокруг его оси x на наименьший угол, при котором всё,
+## что на нём висит, оказывается над полом.
+func _lift_joint(joint: Node3D, subtree: Node3D, floor_y: float) -> void:
+	var start := joint.rotation.x
+	if _lowest(subtree) >= floor_y:
+		return
+	var best := start
+	var best_y := -INF
+	for step in [0.03, 0.06, 0.1, 0.16, 0.25, 0.4, 0.6, 0.9]:
+		for sign in [1.0, -1.0]:
+			joint.rotation.x = start + step * sign
+			var y := _lowest(subtree)
+			if y >= floor_y:
+				# Уточнить: между прежним углом и найденным.
+				var lo := 0.0
+				var hi: float = step
+				for i in 5:
+					var mid := (lo + hi) / 2.0
+					joint.rotation.x = start + mid * sign
+					if _lowest(subtree) >= floor_y:
+						hi = mid
+					else:
+						lo = mid
+				joint.rotation.x = start + hi * sign
+				return
+			if y > best_y:
+				best_y = y
+				best = joint.rotation.x
+	joint.rotation.x = best
+
+
+## Самая низкая точка мешей части тела в мире. own_only — без дочерних суставов
+## (у корпуса это голова и руки).
+func _lowest(node: Node3D, own_only := false) -> float:
+	var y := INF
+	for child in node.get_children():
+		if child is MeshInstance3D:
+			y = minf(y, _mesh_bottom(child))
+			if child.get_child_count() > 0:
+				y = minf(y, _lowest(child))
+		elif child is Node3D and not (child is Area3D) and not (child is CollisionShape3D):
+			if own_only and parts.values().has(child):
+				continue
+			y = minf(y, _lowest(child))
+	return y
+
+
+static func _mesh_bottom(m: MeshInstance3D) -> float:
+	var t := m.global_transform
+	var b := t.basis
+	# Насколько ось меша вытянута по вертикали мира.
+	var up := Vector3(b.x.y, b.y.y, b.z.y)
+	var mesh := m.mesh
+	if mesh is SphereMesh:
+		return t.origin.y - (mesh as SphereMesh).radius * up.length()
+	if mesh is CapsuleMesh:
+		var c := mesh as CapsuleMesh
+		var half := maxf(0.0, c.height / 2.0 - c.radius)
+		return t.origin.y - absf(b.y.y) * half - c.radius * up.length()
+	if mesh is CylinderMesh:
+		var cy := mesh as CylinderMesh
+		var r := maxf(cy.top_radius, cy.bottom_radius)
+		return t.origin.y - absf(b.y.y) * cy.height / 2.0 - r * Vector2(b.x.y, b.z.y).length()
+	if mesh is BoxMesh:
+		var size := (mesh as BoxMesh).size
+		return t.origin.y - (absf(b.x.y) * size.x + absf(b.y.y) * size.y + absf(b.z.y) * size.z) / 2.0
+	if mesh == null:
+		return INF
+	var box := t * mesh.get_aabb()
+	return box.position.y
 
 
 ## Пружины рывков: тянут отклонение обратно к нулю, но слабо затухают — тело
@@ -1370,10 +1513,8 @@ func _start_crawl() -> void:
 	_sink = 0.0
 	for z in _knees:
 		_knees[z].rotation.x = 0.0
-	var tilt := -1.5 if crawl_style == "arms" else -1.45
-	var tween := create_tween().set_parallel()
-	tween.tween_property(body, "rotation:x", tilt, 0.35).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
-	tween.tween_property(body, "position:y", 0.2, 0.35)
+	# Валится ничком: наклон доводит анимация ползания, чтобы пол проверялся
+	# уже после поворота тела.
 	body.rotation.z = 0.0
 	_capsule.height = 0.8
 	_capsule_node.position.y = 0.4
@@ -1488,6 +1629,7 @@ func _corpse_process(delta: float) -> void:
 	move_and_slide()
 	_update_jerk(delta)
 	_animate_dead(delta)
+	_keep_above_floor()
 
 
 func _animate_dead(delta: float) -> void:

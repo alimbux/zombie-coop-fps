@@ -167,6 +167,64 @@ func _test_crawl_speeds() -> void:
 	_check(lows[3] > lows[2] and lows[4] > lows[3] and lows[2] == 0.0, "без рук ползёт ниже %s" % str(lows))
 	world.free()
 	await _frames(1)
+	await _test_crawl_floor()
+
+
+## Ползущие (на коленях, на одной ноге, на руках, без рук) и их трупы ни одной
+## частью тела не уходят под пол.
+func _test_crawl_floor() -> void:
+	var world := Node3D.new()
+	root.add_child(world)
+	var floor_body := StaticBody3D.new()
+	var col := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(40, 1, 40)
+	col.shape = shape
+	floor_body.add_child(col)
+	world.add_child(floor_body)
+	floor_body.position = Vector3(0, -0.5, 0)
+	var dummy := GDScript.new()
+	dummy.source_code = "extends Node3D\nvar downed := false\nfunc take_damage(_a) -> void:\n\tpass\n"
+	dummy.reload()
+	var target: Node3D = dummy.new()
+	target.add_to_group("players")
+	world.add_child(target)
+	target.position = Vector3(0, 0, 12)
+	var cuts := [[], ["leg_r"], ["leg_l"], ["leg_l", "leg_r"], ["leg_l", "leg_r", "arm_l"]]
+	var zs: Array = []
+	for i in cuts.size() + 1:
+		var z = Zombie.new()
+		world.add_child(z)
+		z.position = Vector3(-5 + i * 2.0, 0.05, -6)
+		zs.append(z)
+	await _frames(3)
+	zs[0]._start_kneel()
+	for i in cuts.size():
+		var z = zs[i + 1]
+		for part in cuts[i]:
+			z._sever(part, z.global_position, Vector3.BACK)
+	zs[5]._tear_forearm("arm_r", Vector3.BACK)
+	zs[1]._start_kneel()
+	var worst := INF
+	var worst_who := -1
+	for f in 600:
+		if f == 360:
+			# Убитые обмякают и лежат трупами: руки и ноги тоже не уходят в пол.
+			for z in zs:
+				if is_instance_valid(z) and not z.dead:
+					z._die_body(z.global_position + Vector3.UP * 0.2, Vector3.BACK)
+		await physics_frame
+		for i in zs.size():
+			var z = zs[i]
+			if not is_instance_valid(z) or not (z.dead or z.crawling):
+				continue
+			var d: float = z._lowest(z.body)
+			if d < worst:
+				worst = d
+				worst_who = i
+	_check(worst >= -0.002, "ползущие и их трупы не проваливаются под пол (ниже всего %.3f м, зомби %d)" % [worst, worst_who])
+	world.free()
+	await _frames(1)
 
 
 func _test_waves() -> void:
