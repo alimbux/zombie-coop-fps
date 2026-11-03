@@ -11,6 +11,8 @@ const Gore := preload("res://scripts/gore.gd")
 const Sfx := preload("res://scripts/sfx.gd")
 const Kit := preload("res://scripts/mesh_kit.gd")
 
+## Насколько тише вскрики от попаданий и ударов (Олег попросил их приглушить). Мычание и рык атаки не меняются.
+const CRY_DB := -6.0
 const WALK_SPEED := 1.6
 const FAST_SPEED := 2.6
 const CRAWL_SPEED := 0.75
@@ -738,7 +740,7 @@ func _start_kneel() -> void:
 	_arm_state.clear()
 	_capsule.height = 1.1
 	_capsule_node.position.y = 0.55
-	_say("howl", -1.0)
+	_say("howl", -1.0 + CRY_DB)
 
 
 ## Голос этого зомби: звук со своей высотой.
@@ -798,7 +800,7 @@ func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3, loud :=
 			# бульканье кровью (голова, корпус).
 			if randf() < 0.8:
 				var cries: Array = ["pain", "yelp", "gurgle", "snarl", "yelp"] if zone == "head" or zone == "torso" else ["pain", "yelp", "snarl", "yelp"]
-				_say(cries.pick_random(), -2.0)
+				_say(cries.pick_random(), -2.0 + CRY_DB)
 		# Простреленная нога или изрешечённый корпус: подгибаются колени,
 		# зомби падает на колени и дальше ползёт на четвереньках.
 		if zone.begins_with("leg") and randf() < 0.6:
@@ -844,7 +846,7 @@ func _bump_others() -> void:
 		var deflect := dir - line * dir.dot(line)
 		_knock = (dir * 0.4 + deflect * 1.2).normalized() * speed * 0.55
 		Sfx.play_at(get_parent(), "splat", other.global_position + Vector3.UP, -6.0, 0.7)
-		other._say(["pain", "yelp"].pick_random(), -2.0)
+		other._say(["pain", "yelp"].pick_random(), -2.0 + CRY_DB)
 		speed = _knock.length()
 		if speed < BUMP_SPEED:
 			return
@@ -877,7 +879,7 @@ func kicked(dir: Vector3, speed: float, damage: float) -> void:
 		_start_fall()
 	if zone_hp.has("torso"):
 		zone_hp["torso"] = maxf(1.0, zone_hp["torso"] - damage)
-	_say(["pain", "yelp", "growl"].pick_random(), 0.0)
+	_say(["pain", "yelp", "growl"].pick_random(), CRY_DB)
 
 
 ## Отдача: попадание толкает зомби по направлению выстрела. Лежачего — слабее.
@@ -1206,7 +1208,7 @@ func _open_skull(point: Vector3, dir: Vector3) -> void:
 	Gore.brains(head, top)
 	Gore.burst(get_parent(), point, dir + Vector3.UP, 20)
 	Sfx.play_at(get_parent(), "crunch", point, -2.0, 1.25)
-	_say("shriek", 0.0)
+	_say("shriek", CRY_DB)
 	speed_jitter *= 0.8
 	_head_tilt = 0.5 * signf(_head_tilt if _head_tilt != 0.0 else 1.0)
 
@@ -1252,7 +1254,7 @@ func _tear_forearm(zone: String, dir: Vector3) -> void:
 	Gore.chunks(get_parent(), at, dir, 8)
 	Sfx.play_at(get_parent(), "tear", at, -1.0, randf_range(0.9, 1.15))
 	Sfx.play_at(get_parent(), "hit_bone", at, -5.0, randf_range(0.8, 1.0))
-	_say("shriek", 0.0)
+	_say("shriek", CRY_DB)
 	_arm_len[zone] = _arm_len[zone] * 0.55
 	# Зона попадания — только плечо.
 	for area in arm.get_children():
@@ -1283,7 +1285,7 @@ func _sever(zone: String, point: Vector3, dir: Vector3) -> void:
 	Gore.chunks(get_parent(), part.global_position, dir, 10)
 	Sfx.play_at(get_parent(), "crunch", point, 0.0)
 	Sfx.play_at(get_parent(), "tear", point, -3.0, randf_range(0.8, 1.05))
-	_say("shriek", 0.0)
+	_say("shriek", CRY_DB)
 	_remove_part(zone)
 	if dead:
 		return
@@ -1397,7 +1399,7 @@ func _become_corpse(dir: Vector3, cause: String) -> void:
 	dead = true
 	# Без головы кричать нечем; убитый в корпус хрипит перед смертью.
 	if parts.has("head"):
-		_say("death", -3.0)
+		_say("death", -3.0 + CRY_DB)
 	remove_from_group("zombies")
 	add_to_group("corpses")
 	# Живые и игроки проходят сквозь труп (и спотыкаются о него), пол держит.
