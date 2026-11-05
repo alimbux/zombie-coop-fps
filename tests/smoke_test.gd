@@ -22,6 +22,8 @@ func _run() -> void:
 	await _test_menu()
 	await _test_generator()
 	await _test_side_doors()
+	await _test_glass()
+	await _test_window_fall()
 	await _test_crawl_speeds()
 	await _test_waves()
 	await _test_escape()
@@ -90,6 +92,142 @@ func _test_generator() -> void:
 			_check(medkits <= maxi(1, cells.size() / 5), "%s: аптечек %d — редко" % [tag, medkits])
 			world.free()
 	await _frames(1)
+
+
+## Стеклянные окна: только в наружных стенах, 2–4 секции, бьются со второго попадания.
+func _test_glass() -> void:
+	for params in [[1, 11], [4, 22], [9, 33], [12, 44]]:
+		var world := Node3D.new()
+		root.add_child(world)
+		var gen = LevelGenerator.new()
+		gen.build(world, params[0], 1, params[1])
+		var tag := "стекло, этаж %d" % params[0]
+		_check(not gen.glass_walls.is_empty(), "%s: окна есть (%d)" % [tag, gen.glass_walls.size()])
+		var outer_ok := true
+		var sections_ok := true
+		for g in gen.glass_walls:
+			outer_ok = outer_ok and not gen.links.has(g["cell"] + g["dir"])
+			sections_ok = sections_ok and g["node"].sections.size() >= 2 and g["node"].sections.size() <= 4
+		_check(outer_ok, "%s: стекло только в наружных стенах, не в дверях" % tag)
+		_check(sections_ok, "%s: в окне 2–4 секции" % tag)
+		var outer := 0
+		for c in gen.cells:
+			for d in LevelGenerator.DIRS:
+				if not gen.links.has(c + d):
+					outer += 1
+		_check(gen.glass_walls.size() >= mini(3, outer), "%s: окон не меньше трёх" % tag)
+		world.free()
+	var world := Node3D.new()
+	root.add_child(world)
+	var gen = LevelGenerator.new()
+	gen.build(world, 6, 1, 77)
+	await _frames(2)
+	var win: Node3D = gen.glass_walls[0]["node"]
+	var fired: Array = []
+	win.broken.connect(func(s): fired.append(s))
+	var sec = win.sections[0]
+	var pt: Vector3 = sec.center
+	var dir: Vector3 = -sec.outward
+	sec.hit(34.0, pt, dir)
+	_check(not sec.broken and sec.hp > 0.0, "одно попадание только трескает стекло")
+	_check(sec.get_child_count() > 2, "на стекле остаётся трещина")
+	sec.hit(34.0, pt, dir)
+	_check(sec.broken and fired.size() == 1 and fired[0] == sec, "второе попадание разбивает секцию и шлёт сигнал")
+	for other in win.sections:
+		if other != sec:
+			_check(not other.broken, "соседняя секция цела")
+	await _frames(3)
+	var space := world.get_world_3d().direct_space_state
+	# Луч снаружи до самой плоскости стекла и чуть внутрь, чтобы не задеть мебель в углу.
+	var q := PhysicsRayQueryParameters3D.create(pt - dir * 2.0, pt + dir * 0.3, 1)
+	_check(space.intersect_ray(q).is_empty(), "сквозь разбитую секцию луч проходит")
+	if win.sections.size() > 1:
+		var other = win.sections[1]
+		var q2 := PhysicsRayQueryParameters3D.create(other.center - dir * 2.0, other.center + dir * 2.0, 1)
+		var h := space.intersect_ray(q2)
+		_check(not h.is_empty() and h["collider"].has_meta("glass_section"), "целая секция держит луч")
+	world.free()
+	await _frames(1)
+
+
+## Из разбитой секции вылетают и умирают, из целой — нет; вылетевший игрок не поднимается.
+func _test_window_fall() -> void:
+	var world := Node3D.new()
+	root.add_child(world)
+	var gen = LevelGenerator.new()
+	gen.build(world, 6, 1, 77)
+	await _frames(2)
+	for n in world.get_children():
+		if n is Zombie:
+			n.free()
+	var win: Node3D = gen.glass_walls[0]["node"]
+	var out: Vector3 = win.outward
+	var broken_sec = win.sections[0]
+	var intact_sec = win.sections[1]
+	broken_sec.hit(34.0, broken_sec.center, -out)
+	broken_sec.hit(34.0, broken_sec.center, -out)
+	_check(broken_sec.broken, "окно: секция разбита")
+	await _frames(3)
+
+	var attacker := Node.new()
+	attacker.set_script(_kills_script())
+	world.add_child(attacker)
+	var zf = _spawn(world, broken_sec.center - out * 1.0 + Vector3.DOWN * broken_sec.center.y + Vector3.UP * 0.05)
+	zf.aware = false
+	await _frames(3)
+	zf.kicked(out, 17.0, 8.0, attacker)
+	await _frames(150)
+	_check(not is_instance_valid(zf) or (zf.dead and zf.falling and zf.global_position.y < -1.0), "зомби, выбитый в разбитое окно, падает и умирает")
+	_check(attacker.kills == 1, "падение засчитано как убийство (%d)" % attacker.kills)
+
+	var zi = _spawn(world, intact_sec.center - out * 1.0 + Vector3.DOWN * intact_sec.center.y + Vector3.UP * 0.05)
+	zi.aware = false
+	await _frames(3)
+	var start: Vector3 = zi.global_position
+	zi.kicked(out, 17.0, 8.0, attacker)
+	await _frames(120)
+	_check(not zi.falling and zi.global_position.y > -0.2 and (zi.global_position - win.global_position).dot(out) < 0.0, "у целой секции зомби остаётся в комнате")
+	zi.queue_free()
+
+	# Игрок: перешагнул плоскость в разбитой секции.
+	var cam := Camera3D.new()
+	world.add_child(cam)
+	var hud: Control = load("res://scripts/player_hud.gd").new()
+	world.add_child(hud)
+	var player = load("res://scripts/player.gd").new()
+	player.setup(0, -1, cam, hud)
+	world.add_child(player)
+	player.global_position = broken_sec.center - out * 0.8 + Vector3.DOWN * broken_sec.center.y + Vector3.UP * 0.05
+	player.give_weapon("pistol", 20)
+	await _frames(3)
+	for i in 90:
+		# Ввод игрока сам гасит скорость, поэтому шагаем сдвигом положения.
+		player.global_position += out * 0.08
+		await physics_frame
+		if player.fell:
+			break
+	await _frames(30)
+	_check(player.fell and player.downed and player.hp == 0.0, "игрок, шагнувший в разбитое окно, выпал и умер")
+	var mate = load("res://scripts/player.gd").new()
+	mate.setup(1, -1, Camera3D.new(), null)
+	world.add_child(mate)
+	mate.global_position = player.global_position
+	for i in 200:
+		player._try_revive(0.05)
+	_check(player.downed and player.fell, "выпавшего поднять нельзя")
+	var kit: Dictionary = player.get_loadout()
+	_check(kit["owned"] == ["knife"] and kit["current"] == "knife" and kit["reserve"]["pistol"] == 0, "после падения снаряжение — только нож")
+	await _frames(100)
+	_check(player.global_position.y < -1.0, "выпавший игрок летит вниз")
+	world.free()
+	await _frames(1)
+
+
+func _kills_script() -> GDScript:
+	var sc := GDScript.new()
+	sc.source_code = "extends Node\nvar kills := 0\n"
+	sc.reload()
+	return sc
 
 
 ## Двери бывают у края стены, и зомби сам проходит в такую дверь в соседнюю комнату.

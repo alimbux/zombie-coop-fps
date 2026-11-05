@@ -5,6 +5,8 @@ extends RefCounted
 
 const Zombie := preload("res://scripts/zombie.gd")
 const Pickup := preload("res://scripts/pickup.gd")
+const GlassWindow := preload("res://scripts/glass_window.gd")
+const City := preload("res://scripts/city.gd")
 
 const CELL := 9.0
 const HEIGHT := 3.2
@@ -14,9 +16,13 @@ const DOOR_HEIGHT := 2.4
 ## Насколько сдвинута дверь от середины стены, если она у левого или правого края.
 const DOOR_SIDE := 2.6
 const MAX_ZOMBIES := 150
+## Доля наружных стен со стеклом и минимум таких стен на этаже.
+const GLASS_SHARE := 0.4
+const GLASS_MIN := 3
 const DIRS := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 
 var rng := RandomNumberGenerator.new()
+var rng_seed := 0
 var cells: Array = []
 var links := {}
 ## Сдвиг двери вдоль стены (по x или z) для каждой пары соседних комнат: 0 — по центру,
@@ -26,6 +32,10 @@ var start_cell := Vector2i.ZERO
 var exit_cell := Vector2i.ZERO
 var exit_position := Vector3.ZERO
 var distance_from_start := {}
+## Стеклянные окна этажа: {cell, dir, node}. Решения о стекле берут отдельный генератор,
+## поэтому планировка и остальные случайности для того же seed не меняются.
+var glass_walls: Array = []
+var _glass_keys := {}
 var _next_hop := {}
 var _materials := {}
 
@@ -41,6 +51,7 @@ static func zombies_per_room(floor_number: int, players: int) -> float:
 ## Строит этаж в мире. Возвращает точки старта игроков.
 func build(world: Node3D, floor_number: int, players: int, seed_value: int) -> Dictionary:
 	rng.seed = seed_value
+	rng_seed = seed_value
 	_layout(room_count(floor_number))
 	_compute_paths()
 	var far := 0
@@ -164,6 +175,7 @@ func _build_geometry(world: Node3D) -> void:
 	env_node.environment = env
 	world.add_child(env_node)
 
+	_pick_glass()
 	for c in cells:
 		var base := center(c)
 		_box(world, Vector3(CELL, 0.5, CELL), base + Vector3(0, -0.25, 0), 0.28)
@@ -180,12 +192,52 @@ func _build_geometry(world: Node3D) -> void:
 		if c != start_cell and c != exit_cell:
 			_props(world, c)
 	_exit_marker(world)
+	_city(world)
+
+
+## Ночной город вокруг этажа: свой на каждом этаже, тот же для того же seed.
+func _city(world: Node3D) -> void:
+	var lo := Vector3(INF, 0, INF)
+	var hi := Vector3(-INF, 0, -INF)
+	for c in cells:
+		lo = lo.min(center(c) - Vector3(CELL, 0, CELL) / 2.0)
+		hi = hi.max(center(c) + Vector3(CELL, 0, CELL) / 2.0)
+	City.build(world, lo, hi, rng_seed + 104729)
+
+
+## Выбирает наружные стены (за ними нет комнаты), в которых будет стекло.
+func _pick_glass() -> void:
+	glass_walls = []
+	_glass_keys = {}
+	var outer: Array = []
+	for c in cells:
+		for d in DIRS:
+			if not links.has(c + d):
+				outer.append([c, d])
+	var grng := RandomNumberGenerator.new()
+	grng.seed = rng_seed + 7919
+	var want := outer.size() if outer.size() <= GLASS_MIN else maxi(GLASS_MIN, roundi(outer.size() * GLASS_SHARE))
+	# Тасуем своим генератором, а не rng и не глобальным.
+	for i in range(outer.size() - 1, 0, -1):
+		var j := grng.randi_range(0, i)
+		var tmp = outer[i]
+		outer[i] = outer[j]
+		outer[j] = tmp
+	for i in want:
+		_glass_keys[[outer[i][0], outer[i][1]]] = true
 
 
 func _wall(world: Node3D, c: Vector2i, d: Vector2i, door: bool) -> void:
 	var mid := center(c) + Vector3(d.x, 0, d.y) * CELL / 2.0 + Vector3.UP * HEIGHT / 2.0
 	var along_z := d.x != 0
 	var shade := rng.randf_range(0.45, 0.65)
+	if not door and _glass_keys.has([c, d]):
+		var window := GlassWindow.new()
+		window.setup(d)
+		world.add_child(window)
+		window.position = mid
+		glass_walls.append({"cell": c, "dir": d, "node": window})
+		return
 	if not door:
 		_box(world, Vector3(WALL, HEIGHT, CELL) if along_z else Vector3(CELL, HEIGHT, WALL), mid, shade)
 		return

@@ -9,6 +9,9 @@ var _status: Label
 var _message: Label
 var _level: Label
 var _damage: ColorRect
+var _dead_rect: ColorRect
+var _dead_label: Label
+var _dead_fade := 0.0
 var _hit_timer := 0.0
 var _message_timer := 0.0
 
@@ -68,6 +71,24 @@ func set_status(hp: float, weapon: String, ammo_text: String, kills: int, downed
 			_message.text = "ТЫ ПАЛ — ЖДИ НАПАРНИКА"
 
 
+## Чёрный экран с текстом по центру (игрок выбыл до конца этажа); проявляется за полсекунды.
+func show_dead(text: String) -> void:
+	if _dead_rect == null:
+		_dead_rect = ColorRect.new()
+		_dead_rect.color = Color(0, 0, 0, 0)
+		_dead_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		_dead_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_child(_dead_rect)
+		_dead_label = _label(48)
+		_dead_label.reparent(_dead_rect)
+		_dead_label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		_dead_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_dead_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		_dead_label.modulate.a = 0.0
+		_dead_fade = 0.0
+	_dead_label.text = text
+
+
 func set_level(text: String) -> void:
 	_level.text = text
 
@@ -88,6 +109,10 @@ func show_message(text: String, seconds := 2.0) -> void:
 
 
 func _process(delta: float) -> void:
+	if _dead_rect != null:
+		_dead_fade = minf(1.0, _dead_fade + delta * 2.0)
+		_dead_rect.color.a = _dead_fade
+		_dead_label.modulate.a = _dead_fade
 	_damage.color.a = maxf(0.0, _damage.color.a - delta * 1.5)
 	if _hit_timer > 0.0:
 		_hit_timer -= delta
