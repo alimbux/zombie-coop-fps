@@ -35,7 +35,7 @@ static var _active_groans := 0
 
 ## Генерирует все звуки заранее, чтобы первый выстрел не подтормаживал.
 static func preload_all() -> void:
-	for sound in ["shot", "splat", "crunch", "groan", "growl", "pain", "hurt", "click", "reload", "slash", "pickup"] + HIT_SOUNDS + VOICE_SOUNDS:
+	for sound in ["shot", "splat", "crunch", "groan", "growl", "pain", "hurt", "click", "reload", "slash", "pickup", "glass_crack", "glass_break"] + HIT_SOUNDS + VOICE_SOUNDS:
 		stream(sound)
 	for gun in GUNS:
 		for sound in ["shot_", "reload_", "click_"]:
@@ -121,6 +121,10 @@ static func _synth(sound: String, variant: int) -> PackedFloat32Array:
 	# Попадания и шипение глушим: звонкие верха делают их игрушечными.
 	if sound in HIT_SOUNDS or sound in ["snarl", "gurgle", "splat", "crunch"]:
 		out = _dark(out, 0.22 if sound in ["hit_bone", "hit_skull", "crunch"] else 0.3)
+	elif sound == "glass_crack":
+		out = _dark(out, 0.45)
+	elif sound == "glass_break":
+		out = _dark(out, 0.4)
 	return out
 
 
@@ -148,6 +152,10 @@ static func _synth_raw(sound: String, rng: RandomNumberGenerator) -> PackedFloat
 			return _slash(rng)
 		"pickup":
 			return _pickup()
+		"glass_crack":
+			return _glass_crack(rng)
+		"glass_break":
+			return _glass_break(rng)
 		"hit_flesh":
 			return _hit_flesh(rng)
 		"hit_bone":
@@ -410,6 +418,49 @@ static func _tear(rng: RandomNumberGenerator) -> PackedFloat32Array:
 			break
 		var t := float(j) / RATE
 		out[pop + j] += sin(TAU * 60.0 * t) * exp(-t * 30.0) * 0.9
+	return out
+
+
+## Сухой треск трескающегося стекла: короткий тик и пара глухих щелчков следом.
+static func _glass_crack(rng: RandomNumberGenerator) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	out.resize(int(RATE * 0.16))
+	var ticks := [0.0, rng.randf_range(0.02, 0.05), rng.randf_range(0.06, 0.1)]
+	for k in ticks.size():
+		var start := int(ticks[k] * RATE)
+		var amp := 1.0 if k == 0 else 0.45
+		var f := rng.randf_range(1400.0, 2300.0)
+		for j in int(RATE * 0.025):
+			if start + j >= out.size():
+				break
+			var t := float(j) / RATE
+			out[start + j] += (rng.randf_range(-1.0, 1.0) * 0.7 + sin(TAU * f * t) * 0.5) * exp(-t * 180.0) * amp
+	return out
+
+
+## Разбитое стекло: глухой хруст шумом, пачка коротких затухающих «дзинь» и осыпь мелочи.
+static func _glass_break(rng: RandomNumberGenerator) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	out.resize(int(RATE * 1.2))
+	# Хруст: шум с рваной огибающей.
+	var gate := 0.0
+	for i in int(RATE * 0.5):
+		var t := float(i) / RATE
+		if rng.randf() < 0.004:
+			gate = rng.randf_range(0.5, 1.0)
+		gate *= 0.9993
+		out[i] += rng.randf_range(-1.0, 1.0) * (exp(-t * 9.0) * 0.5 + gate * 0.5) * exp(-t * 3.0)
+	# Осколки звенят и сыплются: короткие тона на случайных моментах, чем дальше, тем тише.
+	for k in rng.randi_range(14, 22):
+		var start := int(rng.randf_range(0.0, 0.9) * RATE)
+		var f := rng.randf_range(1200.0, 3200.0)
+		var decay := rng.randf_range(35.0, 90.0)
+		var amp := rng.randf_range(0.15, 0.5) * (1.0 - float(start) / (RATE * 1.2))
+		for j in int(RATE * 0.12):
+			if start + j >= out.size():
+				break
+			var t := float(j) / RATE
+			out[start + j] += sin(TAU * f * t) * exp(-t * decay) * amp
 	return out
 
 

@@ -336,7 +336,9 @@ static func _stain_ray(world: Node3D, from: Vector3, to: Vector3, radius: float,
 	stain.mesh = BloodStains.mesh()
 	stain.material_override = BloodStains.material(kind)
 	stain.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	world.add_child(stain)
+	# Пятно на стекле принадлежит секции и исчезает, когда она разбивается.
+	var holder: Node = hit["collider"] if (hit["collider"] as Object).has_meta("glass_section") else world
+	holder.add_child(stain)
 	# Каждое следующее пятно чуть выше прежних, чтобы наложенные не мерцали.
 	_layer = (_layer + 1) % 40
 	stain.global_transform = Transform3D(basis, hit["position"] + normal * (0.004 + _layer * 0.0002))

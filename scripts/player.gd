@@ -34,6 +34,13 @@ const KICK_COOLDOWN := 0.7
 const KICK_DAMAGE := 8.0
 ## Насколько сильно нецентральный удар уводит вбок (1 — под 45°).
 const KICK_SIDE := 0.8
+## Ниже этой высоты игрок считается падающим за край этажа; ниже FALL_FREEZE_Y тело замирает.
+const FALL_TRIGGER_Y := -1.5
+const FALL_FREEZE_Y := -30.0
+const FALL_OUT_SPEED := 2.0
+## Через сколько секунд падения экран темнеет и за сколько камера запрокидывается.
+const FALL_BLACKOUT := 1.2
+const FALL_LOOK_TIME := 1.0
 
 var index := 0
 ## Номер геймпада игрока; -1 — только клавиатура и мышь.
@@ -48,6 +55,8 @@ var fire_cooldown := 0.0
 var yaw := 0.0
 var pitch := 0.0
 var kills := 0
+## Выпал из окна: до конца этажа не встаёт, на следующий возвращается только с ножом.
+var fell := false
 
 var owned: Array = ["knife"]
 var current := "knife"
@@ -76,6 +85,11 @@ var _leg: Node3D
 var kick_cooldown := 0.0
 var _kick_anim := 0.0
 var _kick_was_pressed := false
+var _fall_dir := Vector3.FORWARD
+var _fall_time := 0.0
+var _fall_pitch0 := 0.0
+var _fall_yaw0 := 0.0
+var _fall_frozen := false
 
 
 func setup(player_index: int, pad_index: int, cam: Camera3D, hud_node: Control) -> void:
@@ -107,6 +121,12 @@ func _ready() -> void:
 # --- Снаряжение -------------------------------------------------------------
 
 func get_loadout() -> Dictionary:
+	if fell:
+		# Выпавший начинает следующий этаж с одним ножом, без оружия и патронов.
+		var empty := {}
+		for w in Weapons.ORDER:
+			empty[w] = 0
+		return {"owned": ["knife"], "current": "knife", "mag": empty.duplicate(), "reserve": empty.duplicate(), "kills": kills}
 	return {"owned": owned.duplicate(), "current": current, "mag": mag.duplicate(), "reserve": reserve.duplicate(), "kills": kills}
 
 
@@ -185,6 +205,13 @@ func take_damage(amount: float) -> void:
 # --- Каждый кадр ------------------------------------------------------------
 
 func _physics_process(delta: float) -> void:
+	# Сошёл с края разбитого окна: пола под ногами нет.
+	if not fell and global_position.y < FALL_TRIGGER_Y:
+		var away := Vector3(velocity.x, 0.0, velocity.z)
+		fall_out(away if away.length() > 0.1 else Basis(Vector3.UP, yaw) * Vector3.FORWARD)
+	if fell:
+		_fall_out_process(delta)
+		return
 	fire_cooldown -= delta
 	kick_cooldown -= delta
 	_kick_anim = maxf(0.0, _kick_anim - delta / KICK_COOLDOWN)
@@ -312,7 +339,7 @@ func kick():
 	var to_best: Vector3 = best.global_position - global_position
 	var off := clampf(to_best.dot(right) / 0.45, -1.0, 1.0)
 	var dir := (forward + right * off * KICK_SIDE).normalized()
-	best.kicked(dir, KICK_SPEED, KICK_DAMAGE)
+	best.kicked(dir, KICK_SPEED, KICK_DAMAGE, self)
 	Sfx.play_at(get_parent(), "crunch", best.global_position + Vector3.UP, -4.0, 0.8)
 	return best
 
@@ -348,6 +375,11 @@ func shoot() -> String:
 				Gore.splash(get_parent(), hit["position"], dir, 6)
 				loud_debris = false
 			continue
+		if not hit.is_empty() and hit["collider"].has_meta("glass_section"):
+			# Стекло бьют только пули: дробины одного выстрела складываются.
+			if not stats["melee"]:
+				hit["collider"].get_meta("glass_section").hit(stats["damage"], hit["position"], dir)
+			continue
 		if hit.is_empty() or not (hit["collider"] is Area3D) or not hit["collider"].has_meta("zone"):
 			continue
 		var zone: String = hit["collider"].get_meta("zone")
@@ -360,7 +392,7 @@ func shoot() -> String:
 			continue
 		var loud := not hit_zombies.has(zombie)
 		hit_zombies[zombie] = true
-		if zombie.take_hit(zone, stats["damage"], hit["position"], dir, loud, stats["knockback"]):
+		if zombie.take_hit(zone, stats["damage"], hit["position"], dir, loud, stats["knockback"], self):
 			kills += 1
 		if first == "":
 			first = zone
@@ -447,7 +479,7 @@ func _finish_reload() -> void:
 
 
 func _try_revive(delta: float) -> void:
-	if not downed:
+	if not downed or fell:
 		return
 	var helped := false
 	for p in get_tree().get_nodes_in_group("players"):
@@ -466,6 +498,52 @@ func _axis(axis: JoyAxis) -> float:
 
 func _button(button: JoyButton) -> bool:
 	return pad >= 0 and Input.is_joy_button_pressed(pad, button)
+
+
+## Выпал из окна: умирает до конца этажа, поднять нельзя. Повторный вызов ничего не меняет.
+func fall_out(outward: Vector3) -> void:
+	if fell:
+		return
+	fell = true
+	downed = true
+	hp = 0.0
+	revive_progress = 0.0
+	reload_left = 0.0
+	collision_layer = 0
+	collision_mask = 0
+	var out := Vector3(outward.x, 0.0, outward.z)
+	_fall_dir = out.normalized() if out.length() > 0.01 else Vector3.FORWARD
+	_fall_time = 0.0
+	_fall_pitch0 = pitch
+	_fall_yaw0 = yaw
+	if _weapon:
+		_weapon.visible = false
+	if _leg:
+		_leg.visible = false
+	Sfx.play_at(get_parent(), "shriek", global_position + Vector3.UP, 0.0)
+
+
+func _fall_out_process(delta: float) -> void:
+	_fall_time += delta
+	if not _fall_frozen:
+		velocity.y -= GRAVITY * delta
+		var along := maxf(Vector3(velocity.x, 0.0, velocity.z).dot(_fall_dir), FALL_OUT_SPEED)
+		velocity.x = _fall_dir.x * along
+		velocity.z = _fall_dir.z * along
+		move_and_slide()
+		if global_position.y < FALL_FREEZE_Y:
+			_fall_frozen = true
+			velocity = Vector3.ZERO
+			_model.visible = false
+	# Камера едет за телом и запрокидывается: видно уходящее вверх окно.
+	var k := smoothstep(0.0, 1.0, clampf(_fall_time / FALL_LOOK_TIME, 0.0, 1.0))
+	pitch = lerpf(_fall_pitch0, 1.2, k)
+	yaw = lerp_angle(_fall_yaw0, atan2(_fall_dir.x, _fall_dir.z), k)
+	camera.global_transform = Transform3D(
+		Basis.from_euler(Vector3(pitch, yaw, 0.0)),
+		global_position + Vector3.UP * EYE_HEIGHT)
+	if _fall_time >= FALL_BLACKOUT and hud:
+		hud.show_dead("РАЗБИЛСЯ")
 
 
 # --- Камера и модели --------------------------------------------------------

@@ -40,6 +40,10 @@ const KNEEL_SINK := 0.4
 const KNEE_POS := Vector3(0.0, 0.46, 0.0)
 ## Сколько трупов лежит на уровне одновременно: самые старые убираются.
 const MAX_CORPSES := 30
+## Ниже этой высоты зомби считается падающим за край этажа.
+const FALL_TRIGGER_Y := -1.5
+## Минимальная скорость вылета наружу, м/с.
+const FALL_OUT_SPEED := 2.0
 ## Прочность трупа: сколько ещё нужно всадить, чтобы он развалился на куски.
 const CORPSE_HP := 160.0
 
@@ -70,6 +74,10 @@ var speed_jitter := 1.0
 ## Высота голоса: у каждого зомби свой, от низкого хрипа до сиплого крика.
 var voice := 1.0
 var level = null
+## Вылетел из окна и падает: тело больше ни с чем не сталкивается.
+var falling := false
+## Игрок, который последним ударил или ударил ногой: ему засчитывается падение.
+var last_attacker = null
 ## Заметил ли игроков. В режиме волн зомби сразу знают, где все; на этажах — стоят, пока не заметят.
 var aware := true
 
@@ -132,6 +140,9 @@ var _death_timer := 0.0
 var _fall_pivot := Vector3.ZERO
 var _torso_rest := Vector3.ZERO
 var _landed := false
+var _fall_out_dir := Vector3.FORWARD
+var _fall_spin := 3.0
+var _fall_axis := Vector3.RIGHT
 ## Середина лежащего трупа.
 var corpse_center := Vector3.ZERO
 
@@ -315,6 +326,13 @@ func _pivot(zone: String, parent: Node3D) -> Node3D:
 # --- Поведение ----------------------------------------------------------------
 
 func _physics_process(delta: float) -> void:
+	# Ушёл под этаж без окна (например, труп соскользнул с края): тоже падение.
+	if not falling and global_position.y < FALL_TRIGGER_Y:
+		var away := Vector3(velocity.x, 0.0, velocity.z)
+		fall_out(away if away.length() > 0.1 else Vector3.FORWARD)
+	if falling:
+		_fall_out_process(delta)
+		return
 	if dead:
 		_corpse_process(delta)
 		return
@@ -945,9 +963,11 @@ func _look_for_players() -> void:
 # --- Попадания ----------------------------------------------------------------
 
 ## Попадание пули. Возвращает true, если зомби умер.
-func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3, loud := true, force := 1.0) -> bool:
+func take_hit(zone: String, damage: float, point: Vector3, dir: Vector3, loud := true, force := 1.0, attacker = null) -> bool:
 	if dead or not zone_hp.has(zone):
 		return false
+	if attacker != null:
+		last_attacker = attacker
 	alert()
 	push(_glance_dir(point, dir), force)
 	_jolt(zone, point, dir, force)
@@ -1013,6 +1033,8 @@ func _bump_others() -> void:
 		# отскакивает в другую сторону. Чем больше вскользь, тем сильнее разлёт.
 		var line := to.normalized()
 		var push_dir := (line * 0.75 + dir * 0.25).normalized()
+		if last_attacker != null:
+			other.last_attacker = last_attacker
 		other.push(push_dir, speed * BUMP_KEEP)
 		var deflect := dir - line * dir.dot(line)
 		_knock = (dir * 0.4 + deflect * 1.2).normalized() * speed * 0.55
@@ -1036,9 +1058,11 @@ func _glance_dir(point: Vector3, dir: Vector3) -> Vector3:
 
 
 ## Удар ногой: сильный толчок с падением навзничь и немного урона корпусу.
-func kicked(dir: Vector3, speed: float, damage: float) -> void:
+func kicked(dir: Vector3, speed: float, damage: float, attacker = null) -> void:
 	if dead:
 		return
+	if attacker != null:
+		last_attacker = attacker
 	alert()
 	_bumped.clear()
 	push(dir, speed)
@@ -1619,6 +1643,44 @@ func _topple_along(dir: Vector3, speed: float) -> void:
 	_fall_pivot = Vector3.ZERO
 	_fall_vel = maxf(_fall_vel, speed)
 	death_stage = "topple"
+
+
+## Вылет из окна: живой умирает (убийство засчитывается тому, кто его толкнул),
+## труп и ползущий просто падают. Повторный вызов ничего не меняет.
+func fall_out(outward: Vector3) -> void:
+	if falling:
+		return
+	falling = true
+	var out := Vector3(outward.x, 0.0, outward.z)
+	_fall_out_dir = out.normalized() if out.length() > 0.01 else Vector3.FORWARD
+	# Фасад и соседей больше не задеваем, и в зоне падения тело уже не считается.
+	collision_layer = 0
+	collision_mask = 0
+	_fall_spin = randf_range(2.0, 4.0)
+	_fall_axis = _fall_out_dir.cross(Vector3.UP).rotated(Vector3.UP, randf_range(-0.5, 0.5))
+	if not dead:
+		dead = true
+		remove_from_group("zombies")
+		add_to_group("corpses")
+		# Прощальный крик остаётся в точке вылета и затихает, пока зомби летит вниз.
+		Sfx.play_at(get_parent(), ["shriek", "death"].pick_random(), global_position + Vector3.UP, CRY_DB + 4.0, voice)
+		if is_instance_valid(last_attacker) and "kills" in last_attacker:
+			last_attacker.kills += 1
+		died.emit("fall")
+
+
+func _fall_out_process(delta: float) -> void:
+	velocity.y -= GRAVITY * delta
+	var along := maxf(_knock.dot(_fall_out_dir) * exp(-delta), FALL_OUT_SPEED)
+	_knock = _fall_out_dir * along
+	velocity.x = _knock.x
+	velocity.z = _knock.z
+	move_and_slide()
+	if body != null and _fall_axis.length() > 0.01:
+		body.global_rotate(_fall_axis.normalized(), _fall_spin * delta)
+	if global_position.y < -30.0:
+		_corpses.erase(self)
+		queue_free()
 
 
 func _corpse_process(delta: float) -> void:
